@@ -10,7 +10,7 @@ comes from his status screens and should be corrected by his Claude.
 | Goal | Stable 30 FPS (30 FPS mode on), maximum headroom under it | 50-60 FPS in Castle Town |
 | Machine | Ryzen 7 3800X (Zen 2) + RTX 5060 Ti 16 GB — see `SETUPS.md` A | *to fill in* — `SETUPS.md` B |
 | Build line | Frizti V3 + changes, branch `claude/v3-zen2` | Frizti/Lichii (newer than V3), branches incl. `port/zortos-nov7` |
-| Market baseline | 27-30 FPS after 20 min of play; 21-22 FPS right after load | 33-38, then 34 FPS on his recorded route |
+| Market baseline | 27-30 FPS after 20 min of play; 21-22 FPS right after load | 33-38, then 34 FPS on his first recorded route; **44.6 FPS on a new recorded route** (15:58) — routes differ, compare within a route only |
 | Half of the bottleneck | **The back's cost per draw** (buffer binds, banks, storage buffers, texture uploads) | **The front's waits for the back** (MME DMA reads, fence/semaphore releases) |
 | Measuring | `GPU_PROFILE` zones + new sub-zones, `THREAD_USAGE`, on-screen test window, `TC_LOG` | Status loop, `bulk_ab`, frame-time histogram (1 % / 0.1 % lows), planned fixed-route steering, `replay_route.py` |
 
@@ -25,3 +25,14 @@ comes from his status screens and should be corrected by his Claude.
 | PGO profile | Old profile (Ocarina village, build-88 code) | Retrain on current code with the market route + Hyrule Field | Frizti's profile can replace AkiiTW's once the trees are close |
 | Repeatable runs | Fixed test window after load; human player | Fixed route steered from Link's position | AkiiTW adopts the steering when it lands |
 | Ports from zortos293/Lichii | — | #465, #408, #463, #418, #411, #415, #232, #395/#337/#353, AMD #448/#437 | AkiiTW takes them through Frizti's tree |
+
+## Frizti's status screens, as relayed by AkiiTW (newest first)
+
+Frizti's Claude can replace this log with its own entries in `FINDINGS.md`.
+
+| Time (2026-11-07) | Status |
+| --- | --- |
+| 15:58 | New Castle Town route recorded, **44.6 FPS baseline**. Testing: 2D blits noted by their destination (A/B, 8 rounds). Next: how busy the back GPU thread is. Saves restored after every test. — *AkiiTW's data on the back in the market: `FINDINGS.md`, entries "The back is the limit…" and "Where bind stage buffers goes".* |
+| 15:18 | Work queue (LOOP_STATUS.md): EXP10 bounded dispatch/upload writes (−6 % front waiting); next semaphore/query releases, 14-18 ms fence-release drains, ~410 noted-write reads/s; fixed-route steering, `replay_route.py`, 1 % / 0.1 % lows, PGO retrain; zortos ports; item 13 = per-bind bank check ~10 % of the back. |
+| 14:53 | 34 FPS. ~1,000 GPU-thread waits/s were a check giving up after 512 noted writes; testing a per-page write index + tracked inline uploads. |
+| 14:49 | 33-38 FPS. Why the front waits ~2,000×/s; testing a byte-exact overlap check. |
