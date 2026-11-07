@@ -9,6 +9,12 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — Navi hovering over NPCs and animals does not drop the frame rate — ruled out
+- **Who:** AkiiTW · **Setup:** A · **Build:** AkiiTW/Lichii@ca4f7d060
+- **Where measured:** next to an NPC/animal, fixed camera, Navi alternately on the NPC and back with Link, every 30 s
+- **Measured:** by eye on Lichii's frame-time graph: no change between the two states.
+- **Conclusion:** ruled out (suspected by players; not worth a log analysis).
+
 ### 2026-11-07 — `EDEN_NX2_TC_RT_REUSE`: reusing dropped render targets' host images gains nothing — ruled out
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@ca4f7d060 (04595848c had the switch silently doing nothing: `MarkPoolable` was private, so the `requires` test skipped it)
 - **Where measured:** market, fountain laps in the 150-270 s window; same switches as the RT_EVICT entry below plus `EDEN_NX2_TC_RT_REUSE=1`
