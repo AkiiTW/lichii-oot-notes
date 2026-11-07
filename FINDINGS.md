@@ -9,6 +9,12 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — `EDEN_NX2_TC_RT_EVICT=2` (drop after 2 unused frames instead of 4): worse — ruled out
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@3832dc36b
+- **Where measured:** market, fountain laps in the 150-270 s window
+- **Measured:** image creations 396 → 672/s (targets dropped and asked for again), view create 17 → 25, image join 12 → 16, image free 17 → 21 ms/s; deletes ~16,500 per 600 frames (vs ~9,000); overlaps unlinked per delete fell (~105) but delete overlaps stayed 13 ms/s. Mean frame 36.7 ms (noise band 35-38).
+- **Conclusion:** ruled out; 4 frames stays. Some targets are reused after 2-3 idle frames.
+
 ### 2026-11-07 — Unlinking a deleted image's overlaps with find + erase: delete overlaps 22 → 13 ms/s — confirmed
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@3832dc36b
 - **Where measured:** market, fountain laps in the 150-270 s window, switches as in the RT_REUSE entry
