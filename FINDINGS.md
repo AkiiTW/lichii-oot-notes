@@ -9,6 +9,12 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — Unlinking a deleted image's overlaps with find + erase: delete overlaps 22 → 13 ms/s — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@3832dc36b
+- **Where measured:** market, fountain laps in the 150-270 s window, switches as in the RT_REUSE entry
+- **Measured:** `delete overlaps` 22.1 → 12.8 ms/s for about as many overlaps (0.24-1.66 M per 600 frames, ~390 deletes/s). Mean frame 37.7 ms (35.1 in the run before; the five runs on this code family spread 35.0-38.3 ms).
+- **Conclusion:** kept (same result, ~9 ms/s less on the back).
+
 ### 2026-11-07 — Game-file mod: clustered lighting depth slices 512 → 128 — no effect, ruled out
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@5cc9051c3
 - **Where measured:** market, fountain laps in the 150-270 s window; `ModelSceneConfigParam/Main` `ViewFrustumClusterSizeZ` 512 → 128 (2 bytes, private mod)
