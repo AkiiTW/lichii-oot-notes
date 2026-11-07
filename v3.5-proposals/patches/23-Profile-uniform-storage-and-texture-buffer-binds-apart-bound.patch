@@ -1,0 +1,235 @@
+From 9842699121bb20daefbc01838f1f73aa717b3b4b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 14:48:23 +0100
+Subject: [PATCH] Profile uniform, storage and texture buffer binds apart;
+ bound the sampler's stack walk
+
+GPU_PROFILE splits 'bind stage buffers' into the uniform buffer paths (fast/streamed, classic,
+native 64 KiB banks), storage and texture buffer binds, with the uniform buffer sizes of each
+path. The sampler froze and crashed a MinGW build as soon as it started: its walk now reads only
+between the paused stack pointer and the thread's stack base, and stops at a frame that does not
+move up.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/common/nx2_sampler.cpp                 | 47 +++++++++++++++++++---
+ src/video_core/buffer_cache/buffer_cache.h | 10 +++++
+ src/video_core/nx2_profile.h               | 29 +++++++++++++
+ 3 files changed, 81 insertions(+), 5 deletions(-)
+
+diff --git a/src/common/nx2_sampler.cpp b/src/common/nx2_sampler.cpp
+index 09cc37cd4..9b9064956 100644
+--- a/src/common/nx2_sampler.cpp
++++ b/src/common/nx2_sampler.cpp
+@@ -38,8 +38,32 @@ struct Sample {
+ struct Target {
+     HANDLE handle;
+     std::string name;
++    DWORD64 stack_base; ///< Upper end of the thread's stack (0: unknown, walk the first frame only)
+ };
+ 
++// The thread's stack base from its TEB (NT_TIB::StackBase), read in this process.
++DWORD64 StackBase(HANDLE thread) {
++    struct ThreadBasicInformation {
++        LONG exit_status;
++        PVOID teb_base;
++        PVOID client_id[2];
++        ULONG_PTR affinity_mask;
++        LONG priority;
++        LONG base_priority;
++    };
++    using QueryFn = LONG(WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
++    static const auto query = reinterpret_cast<QueryFn>(reinterpret_cast<void*>(
++        GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationThread")));
++    if (query == nullptr) {
++        return 0;
++    }
++    ThreadBasicInformation info{};
++    if (query(thread, 0, &info, sizeof(info), nullptr) < 0 || info.teb_base == nullptr) {
++        return 0;
++    }
++    return reinterpret_cast<DWORD64>(static_cast<NT_TIB*>(info.teb_base)->StackBase);
++}
++
+ double EnvSeconds(const char* name, double fallback) {
+     const char* text = std::getenv(name);
+     return text != nullptr ? std::strtod(text, nullptr) : fallback;
+@@ -95,7 +119,7 @@ std::vector<Target> FindThreads(const std::vector<std::string>& patterns) {
+             continue;
+         }
+         const HANDLE handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+-                                             THREAD_QUERY_LIMITED_INFORMATION,
++                                             THREAD_QUERY_INFORMATION,
+                                          FALSE, entry.th32ThreadID);
+         if (handle == nullptr) {
+             continue;
+@@ -110,7 +134,7 @@ std::vector<Target> FindThreads(const std::vector<std::string>& patterns) {
+             LocalFree(wide);
+         }
+         if (Matches(name, patterns)) {
+-            targets.push_back({handle, name});
++            targets.push_back({handle, name, StackBase(handle)});
+         } else {
+             CloseHandle(handle);
+         }
+@@ -120,11 +144,21 @@ std::vector<Target> FindThreads(const std::vector<std::string>& patterns) {
+ }
+ 
+ // Walks a suspended thread's stack from its context. Nothing here may allocate: the thread
+-// could be paused holding the heap lock.
+-unsigned Walk(CONTEXT context, std::array<DWORD64, MaxDepth>& frames) {
++// could be paused holding the heap lock. Every read stays between the stack pointer at the pause
++// and the stack's base, and each frame must move up: a frame unwound from a wrong guess (code
++// without unwind data, such as the macro JIT) stops the walk instead of reading stray memory.
++unsigned Walk(CONTEXT context, DWORD64 stack_base, std::array<DWORD64, MaxDepth>& frames) {
+     unsigned depth = 0;
++    const DWORD64 stack_low = context.Rsp;
++    const auto on_stack = [&](DWORD64 rsp) {
++        return stack_base != 0 && rsp >= stack_low && rsp + 8 <= stack_base;
++    };
+     while (depth < MaxDepth && context.Rip != 0) {
+         frames[depth++] = context.Rip;
++        if (!on_stack(context.Rsp)) {
++            break;
++        }
++        const DWORD64 previous_rsp = context.Rsp;
+         DWORD64 image_base{};
+         const PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
+         if (function == nullptr) {
+@@ -141,6 +175,9 @@ unsigned Walk(CONTEXT context, std::array<DWORD64, MaxDepth>& frames) {
+         DWORD64 establisher_frame{};
+         RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, context.Rip, function, &context,
+                          &handler_data, &establisher_frame, nullptr);
++        if (context.Rsp <= previous_rsp) {
++            break;
++        }
+     }
+     return depth;
+ }
+@@ -327,7 +364,7 @@ std::string SampleThreads(const std::vector<std::string>& patterns, double secon
+             if (GetThreadContext(handle, &context)) {
+                 Sample& sample = samples.emplace_back();
+                 sample.thread = i;
+-                sample.depth = Walk(context, sample.frames);
++                sample.depth = Walk(context, targets[i].stack_base, sample.frames);
+             }
+             ResumeThread(handle);
+         }
+diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
+index 625e19f2e..7e2df28fe 100644
+--- a/src/video_core/buffer_cache/buffer_cache.h
++++ b/src/video_core/buffer_cache/buffer_cache.h
+@@ -709,9 +709,11 @@ template <class P>
+ void BufferCache<P>::BindHostStageBuffers(size_t stage) {
+     BindHostGraphicsUniformBuffers(stage);
+     if (channel_state->enabled_storage_buffers[stage] != 0) {
++        Nx2Profile::Scope scope{Nx2Profile::Zone::StorageBinds};
+         BindHostGraphicsStorageBuffers(stage);
+     }
+     if (channel_state->enabled_texture_buffers[stage] != 0) {
++        Nx2Profile::Scope scope{Nx2Profile::Zone::TexBufBinds};
+         BindHostGraphicsTextureBuffers(stage);
+     }
+ }
+@@ -1484,6 +1486,7 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32
+          !native_indirect_uniforms_this_frame.contains(device_addr)) &&
+         !memory_tracker.IsRegionGpuModified(device_addr, size) &&
+         native_indirect_uniforms_this_frame.insert(device_addr).second) {
++        Nx2Profile::Scope scope{Nx2Profile::Zone::UboBank};
+         // The bank size is only an upper limit: stop at the end of the mapped memory.
+         u64 mapped_size = 0;
+         while (mapped_size < size &&
+@@ -1498,12 +1501,15 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32
+                 .size = upload_size,
+             }};
+             UploadMemory(buffer, upload_size, upload_size, copies);
++            Nx2Profile::Add(Nx2Profile::Counter::UboBankBytes, upload_size);
+         }
+     }
+     const bool use_fast_buffer = needs_alignment_stream
+         || (has_host_buffer && size <= channel_state->uniform_buffer_skip_cache_size
+             && !memory_tracker.IsRegionGpuModified(device_addr, size));
+     if (use_fast_buffer) {
++        Nx2Profile::Scope scope{Nx2Profile::Zone::UboFast};
++        Nx2Profile::Add(Nx2Profile::Counter::UboFastBytes, size);
+         if constexpr (IS_OPENGL) {
+             if (runtime.HasFastBufferSubData()) {
+                 // Fast path for Nvidia
+@@ -1541,8 +1547,12 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32
+         return;
+     }
+     // Classic cached path
++    Nx2Profile::Scope scope{Nx2Profile::Zone::UboClassic};
++    Nx2Profile::Add(Nx2Profile::Counter::UboClassicBytes, size);
+     if (SynchronizeBuffer(buffer, device_addr, size)) {
+         ++channel_state->uniform_cache_hits[0];
++    } else {
++        Nx2Profile::Add(Nx2Profile::Counter::UboClassicSynced, 1);
+     }
+     // Skip binding if it's not needed and if the bound buffer is not the fast version
+     // This exists to avoid instances where the fast buffer is bound and a GPU write happens
+diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
+index 14265b590..d30a3a835 100644
+--- a/src/video_core/nx2_profile.h
++++ b/src/video_core/nx2_profile.h
+@@ -63,6 +63,11 @@ enum class Zone : u32 {
+     WriterWait,
+     ListSubmitWait,
+     ListGpuWait,
++    UboFast,      ///< Uniform buffers streamed (small, not GPU-written): compare or copy
++    UboClassic,   ///< Uniform buffers bound from the buffer cache (SynchronizeBuffer)
++    UboBank,      ///< 64 KiB native banks uploaded again once per frame
++    StorageBinds, ///< Graphics storage buffers bound with the stage's buffers
++    TexBufBinds,  ///< Graphics texture buffers bound with the stage's buffers
+     Count,
+ };
+ 
+@@ -75,6 +80,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
+     "configure draw", "dynamic state", "draw record", "texture upload", "fence",
+     "fence skipped", "method", "split drain", "split wait",
+     "writer wait", "list submit wait", "list GPU wait",
++    "ubo fast",      "ubo classic",   "ubo bank",       "storage binds",  "texbuf binds",
+ };
+ 
+ // Read once, when the GPU thread starts (Initialize): Enabled() runs several times per method
+@@ -250,6 +256,10 @@ enum class Counter : u32 {
+     SemAsyncPending,  ///< SemaphoreReadableNow false: a counter report or timed release is pending
+     SemWritersWait,   ///< SemaphoreReadableNow false: WaitForWritesTo gave up
+     AcquireNoDrain,   ///< Acquires of a current word not met yet that registered without a drain
++    UboFastBytes,     ///< Bytes of uniform buffers taken by the fast (streamed) path
++    UboClassicBytes,  ///< Bytes of uniform buffers bound by the classic path
++    UboClassicSynced, ///< Classic binds whose SynchronizeBuffer found CPU-written data to upload
++    UboBankBytes,     ///< Bytes of 64 KiB native banks uploaded again
+     Count,
+ };
+ static_assert(static_cast<size_t>(Counter::Count) <= 64, "Counter outgrew the counters array");
+@@ -418,6 +428,25 @@ inline void Report(const char* thread_name = "GPU thread") {
+                             static_cast<double>(same) * 1e9 / window,
+                             static_cast<double>(changed) * 1e9 / window);
+     }
++    if (data.count[static_cast<size_t>(Zone::UboFast)] != 0 ||
++        data.count[static_cast<size_t>(Zone::UboClassic)] != 0) {
++        const auto per_second = [&](u64 value) {
++            return static_cast<double>(value) * 1e9 / window;
++        };
++        const auto bytes_each = [&](Counter counter, Zone zone) {
++            const u64 calls = data.count[static_cast<size_t>(zone)];
++            return calls != 0
++                       ? static_cast<double>(data.counters[static_cast<size_t>(counter)]) / calls
++                       : 0.0;
++        };
++        line += fmt::format(" | uniform buffer sizes: fast {:.0f} B each, classic {:.0f} B each "
++                            "({:.0f}/s with CPU-written data), banks {:.0f} KiB/s",
++                            bytes_each(Counter::UboFastBytes, Zone::UboFast),
++                            bytes_each(Counter::UboClassicBytes, Zone::UboClassic),
++                            per_second(data.counters[static_cast<size_t>(Counter::UboClassicSynced)]),
++                            per_second(data.counters[static_cast<size_t>(Counter::UboBankBytes)]) /
++                                1024.0);
++    }
+     if (const u64 early = data.counters[static_cast<size_t>(Counter::DmaReadsEarly)]; early != 0) {
+         const auto rate = [&](Counter counter) {
+             return static_cast<double>(data.counters[static_cast<size_t>(counter)]) * 1e9 / window;
+-- 
+2.43.0
+

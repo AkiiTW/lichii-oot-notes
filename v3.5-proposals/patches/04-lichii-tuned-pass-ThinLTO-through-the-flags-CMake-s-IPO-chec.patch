@@ -1,0 +1,49 @@
+From 0e688990e33a826d8a1bdc617a08c73109d3efc8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 02:03:59 +0100
+Subject: [PATCH] lichii-tuned: pass ThinLTO through the flags; CMake's IPO
+ check fails under MSYS2 clang
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ .github/workflows/lichii-tuned.yml | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/.github/workflows/lichii-tuned.yml b/.github/workflows/lichii-tuned.yml
+index 5d126ac7e..fe94dd14e 100644
+--- a/.github/workflows/lichii-tuned.yml
++++ b/.github/workflows/lichii-tuned.yml
+@@ -84,7 +84,16 @@ jobs:
+           set -euo pipefail
+           profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
+             -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
+-          cmake -S . -B build/release -G Ninja \
++          # CMake's IPO check fails under MSYS2 clang (UseLTO.cmake stops the configure), so
++          # ThinLTO goes in the flags directly, with LLVM's archiver for the bitcode objects.
++          lto=()
++          linker="-fuse-ld=lld"
++          if [ '${{ matrix.lto }}' = 'true' ]; then
++            profile="$profile -flto=thin"
++            linker="$linker -flto=thin"
++            lto=(-DCMAKE_AR=/ucrt64/bin/llvm-ar.exe -DCMAKE_RANLIB=/ucrt64/bin/llvm-ranlib.exe)
++          fi
++          cmake -S . -B build/release -G Ninja "${lto[@]}" \
+             -DCMAKE_BUILD_TYPE=Release \
+             -DBUILD_TESTING=OFF \
+             -DYUZU_TESTS=OFF \
+@@ -102,10 +111,9 @@ jobs:
+             -DUSE_DISCORD_PRESENCE=OFF \
+             -DUSE_CCACHE=ON \
+             -DYUZU_BUILD_PRESET=${{ inputs.preset || 'zen2' }} \
+-            -DENABLE_LTO=${{ matrix.lto && 'ON' || 'OFF' }} \
+             -DCMAKE_C_COMPILER=clang \
+             -DCMAKE_CXX_COMPILER=clang++ \
+-            -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
++            "-DCMAKE_EXE_LINKER_FLAGS=$linker" \
+             "-DCMAKE_C_FLAGS=$profile" \
+             "-DCMAKE_CXX_FLAGS=$profile"
+ 
+-- 
+2.43.0
+

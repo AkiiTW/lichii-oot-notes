@@ -1,0 +1,36 @@
+From ba683689023f597f23af8a3eb8d2226e49002aef Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 18:03:15 +0100
+Subject: [PATCH] pgo: Ocarina village profile from the cd1f029 pgogen build
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ pgo/README.md | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/pgo/README.md b/pgo/README.md
+index dd7b16cdf..db75622e9 100644
+--- a/pgo/README.md
++++ b/pgo/README.md
+@@ -1,7 +1,11 @@
+-# Ocarina of Time PGO profile
++# Ocarina of Time PGO profiles
+ 
+-1. Run the `pgogen` artifact of the lichii-tuned workflow (an instrumented, slower build).
+-2. Play Ocarina of Time for 5-10 minutes in the places that matter (Kokiri Forest, the village
+-   wide view, combat, menus), then close Lichii normally (File > Exit).
+-3. `default_*.profraw` files appear next to lichii.exe. Zip them and upload the zip here (pgo/).
+-4. The push rebuilds the `normal` and `lto` flavors with this profile merged in.
++Raw profiles (`.profraw`, or `.zip` archives of them) recorded with the `pgogen` flavor of
++`lichii-tuned` (only `video_core` and `shader_recompiler` instrumented). The workflow merges them
++into the profile the `normal` flavor uses, each weighted 4 over `eglantine.profdata`.
++
++- `ocarina-village-cd1f029.profraw`: build cd1f029, ~6.5 min in Kokiri Forest (usual spot, wide
++  view, camera turns in the village), RTX 5060 Ti, Ryzen 7 3800X.
++
++A profile only fits the code it was recorded with: record a new one after large changes to the
++GPU emulation (stale functions are skipped with -Wno-profile-instr-out-of-date).
+-- 
+2.43.0
+

@@ -1,0 +1,479 @@
+From d8e4fe222211871fe450eff118383f3a9c608a19 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 14:06:58 +0100
+Subject: [PATCH] On-screen countdown for timed play tests
+
+A panel at the top right of the window says what to do and counts down to the recording and to
+its end (EDEN_NX2_TEST_START / _SECONDS / _LABEL / _PREPARE, or the sampler's window when
+EDEN_NX2_SAMPLE is set). The window's start and end are logged so a log can be cut to it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/common/CMakeLists.txt        |   2 +
+ src/common/nx2_test_window.cpp   | 114 ++++++++++++++++++++++++++
+ src/common/nx2_test_window.h     |  36 ++++++++
+ src/core/core.cpp                |   3 +
+ src/yuzu/CMakeLists.txt          |   1 +
+ src/yuzu/main_window.cpp         |  11 +++
+ src/yuzu/main_window.h           |   2 +
+ src/yuzu/render/test_overlay.cpp | 136 +++++++++++++++++++++++++++++++
+ src/yuzu/render/test_overlay.h   |  32 ++++++++
+ 9 files changed, 337 insertions(+)
+ create mode 100644 src/common/nx2_test_window.cpp
+ create mode 100644 src/common/nx2_test_window.h
+ create mode 100644 src/yuzu/render/test_overlay.cpp
+ create mode 100644 src/yuzu/render/test_overlay.h
+
+diff --git a/src/common/CMakeLists.txt b/src/common/CMakeLists.txt
+index 2a5cb1a6d..7ee77b5fd 100644
+--- a/src/common/CMakeLists.txt
++++ b/src/common/CMakeLists.txt
+@@ -48,6 +48,8 @@ add_library(
+     nx2_placement.cpp
+     nx2_thread_usage.cpp
+     nx2_thread_usage.h
++    nx2_test_window.cpp
++    nx2_test_window.h
+     nx2_placement.h
+     nx2_sampler.cpp
+     nx2_sampler.h
+diff --git a/src/common/nx2_test_window.cpp b/src/common/nx2_test_window.cpp
+new file mode 100644
+index 000000000..32c63f3db
+--- /dev/null
++++ b/src/common/nx2_test_window.cpp
+@@ -0,0 +1,114 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "common/nx2_test_window.h"
++
++#include <atomic>
++#include <chrono>
++#include <cstdlib>
++#include <mutex>
++#include <thread>
++
++#include "common/logging.h"
++
++namespace Nx2TestWindow {
++namespace {
++
++using Clock = std::chrono::steady_clock;
++
++struct Config {
++    double start = -1.0;
++    double seconds = 0.0;
++    std::string prepare;
++    std::string label;
++};
++
++std::mutex mutex;
++Config config;
++Clock::time_point origin;
++std::atomic<unsigned> generation{0};
++bool running = false;
++
++double EnvSeconds(const char* name, double fallback) {
++    const char* text = std::getenv(name);
++    return text != nullptr && *text != '\0' ? std::strtod(text, nullptr) : fallback;
++}
++
++std::string EnvText(const char* name, const char* fallback) {
++    const char* text = std::getenv(name);
++    return text != nullptr && *text != '\0' ? std::string{text} : std::string{fallback};
++}
++
++Config ReadConfig() {
++    Config result;
++    const char* sample = std::getenv("EDEN_NX2_SAMPLE");
++    const bool sampling = sample != nullptr && *sample != '\0';
++    result.start = EnvSeconds("EDEN_NX2_TEST_START",
++                              sampling ? EnvSeconds("EDEN_NX2_SAMPLE_START", 60.0) : -1.0);
++    result.seconds = EnvSeconds("EDEN_NX2_TEST_SECONDS",
++                                sampling ? EnvSeconds("EDEN_NX2_SAMPLE_SECONDS", 30.0) : 0.0);
++    result.prepare = EnvText("EDEN_NX2_TEST_PREPARE", "Va au marché, devant la fontaine");
++    result.label = EnvText("EDEN_NX2_TEST_LABEL", "Tourne autour de la fontaine");
++    return result;
++}
++
++} // Anonymous namespace
++
++void Start() {
++    const Config read = ReadConfig();
++    if (read.start < 0.0 || read.seconds <= 0.0) {
++        return;
++    }
++    unsigned my_generation;
++    {
++        std::scoped_lock lock{mutex};
++        config = read;
++        origin = Clock::now();
++        running = true;
++        my_generation = ++generation;
++    }
++    LOG_INFO(Common, "Nx2TestWindow: recording from {:.0f} s to {:.0f} s after load ({})",
++             read.start, read.start + read.seconds, read.label);
++    std::thread{[read, my_generation] {
++        std::this_thread::sleep_for(std::chrono::duration<double>(read.start));
++        if (generation.load() != my_generation) {
++            return;
++        }
++        LOG_INFO(Common, "Nx2TestWindow: recording starts");
++        std::this_thread::sleep_for(std::chrono::duration<double>(read.seconds));
++        if (generation.load() != my_generation) {
++            return;
++        }
++        LOG_INFO(Common, "Nx2TestWindow: recording ends");
++    }}.detach();
++}
++
++void Stop() {
++    std::scoped_lock lock{mutex};
++    running = false;
++    ++generation;
++}
++
++Status Get() {
++    std::scoped_lock lock{mutex};
++    Status status;
++    if (!running) {
++        return status;
++    }
++    const double elapsed = std::chrono::duration<double>(Clock::now() - origin).count();
++    status.prepare = config.prepare;
++    status.label = config.label;
++    status.seconds_total = config.seconds;
++    if (elapsed < config.start) {
++        status.phase = Phase::Waiting;
++        status.seconds_left = config.start - elapsed;
++    } else if (elapsed < config.start + config.seconds) {
++        status.phase = Phase::Recording;
++        status.seconds_left = config.start + config.seconds - elapsed;
++    } else {
++        status.phase = Phase::Done;
++    }
++    return status;
++}
++
++} // namespace Nx2TestWindow
+diff --git a/src/common/nx2_test_window.h b/src/common/nx2_test_window.h
+new file mode 100644
+index 000000000..d4c407c2d
+--- /dev/null
++++ b/src/common/nx2_test_window.h
+@@ -0,0 +1,36 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <string>
++
++namespace Nx2TestWindow {
++
++// A timed measurement window for play tests, shown on screen so the player knows when to be
++// in place. EDEN_NX2_TEST_START / EDEN_NX2_TEST_SECONDS (seconds after the game is loaded) set
++// it; without them it follows the sampler's window when EDEN_NX2_SAMPLE is set
++// (EDEN_NX2_SAMPLE_START / _SECONDS). EDEN_NX2_TEST_LABEL is the instruction shown during the
++// window, EDEN_NX2_TEST_PREPARE the one shown before it. The start and end are logged, so a
++// log can be cut to the window.
++
++enum class Phase { None, Waiting, Recording, Done };
++
++struct Status {
++    Phase phase = Phase::None;
++    double seconds_left = 0.0; ///< Until the window starts (Waiting) or ends (Recording).
++    double seconds_total = 0.0;
++    std::string prepare;
++    std::string label;
++};
++
++/// Called when a game is loaded: starts the clock (and the start/end log lines) if configured.
++void Start();
++
++/// Forgets the window (the game stopped).
++void Stop();
++
++/// Where the current game is in its window.
++Status Get();
++
++} // namespace Nx2TestWindow
+diff --git a/src/core/core.cpp b/src/core/core.cpp
+index 7b33e18f0..fdf17a2a4 100644
+--- a/src/core/core.cpp
++++ b/src/core/core.cpp
+@@ -13,6 +13,7 @@
+ #include "common/fs/fs.h"
+ #include "common/logging.h"
+ #include "common/nx2_sampler.h"
++#include "common/nx2_test_window.h"
+ #include "common/adpf.h"
+ #include "common/settings.h"
+ #include "common/settings_enums.h"
+@@ -492,11 +493,13 @@ struct System::Impl {
+         }
+         debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
+         Nx2Sampler::StartFromEnvironment();
++        Nx2TestWindow::Start();
+         return SystemResultStatus::Success;
+     }
+ 
+     void ShutdownMainProcess() {
+         debug_service.reset();
++        Nx2TestWindow::Stop();
+         SetShuttingDown(true);
+         Common::ADPF::Shutdown();
+ 
+diff --git a/src/yuzu/CMakeLists.txt b/src/yuzu/CMakeLists.txt
+index 2052b6339..e2e58fcc5 100644
+--- a/src/yuzu/CMakeLists.txt
++++ b/src/yuzu/CMakeLists.txt
+@@ -239,6 +239,7 @@ add_executable(yuzu
+     configuration/addon/mod_select_dialog.h configuration/addon/mod_select_dialog.cpp configuration/addon/mod_select_dialog.ui
+ 
+     render/performance_overlay.h render/performance_overlay.cpp render/performance_overlay.ui
++    render/test_overlay.h render/test_overlay.cpp
+     updater/update_dialog.h updater/update_dialog.cpp updater/update_dialog.ui
+     game/common.h
+     game/carousel.h game/carousel.cpp
+diff --git a/src/yuzu/main_window.cpp b/src/yuzu/main_window.cpp
+index 8f5f7f6eb..d3fbd24d0 100644
+--- a/src/yuzu/main_window.cpp
++++ b/src/yuzu/main_window.cpp
+@@ -15,6 +15,7 @@
+ #include "common/settings_enums.h"
+ #include "frontend_common/settings_generator.h"
+ #include "render/performance_overlay.h"
++#include "render/test_overlay.h"
+ #ifdef HAS_RESHADE
+ #include "configuration/configure_post_processing.h"
+ #include "video_core/post_processing/fx_preset.h"
+@@ -2228,6 +2229,11 @@ bool MainWindow::OnShutdownBegin() {
+         perf_overlay->deleteLater();
+         perf_overlay = nullptr;
+     }
++    if (test_overlay) {
++        test_overlay->hide();
++        test_overlay->deleteLater();
++        test_overlay = nullptr;
++    }
+ 
+     QtCommon::system->SetShuttingDown(true);
+     status_bar_update_timer.stop();
+@@ -3270,6 +3276,11 @@ void MainWindow::OnLoadComplete() {
+ 
+     connect(perf_overlay, &PerformanceOverlay::closed, perf_overlay,
+             [this]() { ui->action_Show_Performance_Overlay->setChecked(false); });
++
++    // A timed play test (EDEN_NX2_TEST_* or EDEN_NX2_SAMPLE): its countdown, top right.
++    if (TestOverlay::IsWanted()) {
++        test_overlay = new TestOverlay(this);
++    }
+ }
+ 
+ void MainWindow::OnExecuteProgram(std::size_t program_index) {
+diff --git a/src/yuzu/main_window.h b/src/yuzu/main_window.h
+index 69d5ef069..d861c251d 100644
+--- a/src/yuzu/main_window.h
++++ b/src/yuzu/main_window.h
+@@ -60,6 +60,7 @@ class QSlider;
+ class QHBoxLayout;
+ class WaitTreeWidget;
+ class PerformanceOverlay;
++class TestOverlay;
+ #ifdef HAS_RESHADE
+ class ConfigurePostProcessing;
+ #endif
+@@ -519,6 +520,7 @@ private:
+     QTimer emu_terminate_timer;
+     OverlayDialog* shutdown_dialog{};
+     PerformanceOverlay* perf_overlay = nullptr;
++    TestOverlay* test_overlay = nullptr;
+ #ifdef HAS_RESHADE
+     ConfigurePostProcessing* post_processing_dialog = nullptr;
+ #endif
+diff --git a/src/yuzu/render/test_overlay.cpp b/src/yuzu/render/test_overlay.cpp
+new file mode 100644
+index 000000000..001f1d729
+--- /dev/null
++++ b/src/yuzu/render/test_overlay.cpp
+@@ -0,0 +1,136 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "test_overlay.h"
++
++#include <algorithm>
++#include <cmath>
++
++#include <QPainter>
++#include <QPainterPath>
++
++#include "common/nx2_test_window.h"
++#include "main_window.h"
++
++namespace {
++
++constexpr int TickMs = 250;
++constexpr double DoneShownSeconds = 60.0;
++
++QString Clock(double seconds) {
++    const int whole = static_cast<int>(std::ceil(std::max(seconds, 0.0)));
++    return QStringLiteral("%1:%2").arg(whole / 60).arg(whole % 60, 2, 10, QLatin1Char('0'));
++}
++
++} // Anonymous namespace
++
++TestOverlay::TestOverlay(MainWindow* parent) : QWidget(parent), m_mainWindow{parent} {
++    setAttribute(Qt::WA_TranslucentBackground);
++    setAttribute(Qt::WA_TransparentForMouseEvents);
++    setAttribute(Qt::WA_ShowWithoutActivating);
++    setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowDoesNotAcceptFocus);
++    setFixedSize(340, 112);
++    connect(&m_timer, &QTimer::timeout, this, &TestOverlay::Tick);
++    connect(parent, &MainWindow::positionChanged, this, [this](const QPoint&) { Place(); });
++    m_timer.start(TickMs);
++    Place();
++}
++
++bool TestOverlay::IsWanted() {
++    return Nx2TestWindow::Get().phase != Nx2TestWindow::Phase::None;
++}
++
++void TestOverlay::Place() {
++    const QRect frame = m_mainWindow->geometry();
++    move(frame.x() + frame.width() - width() - 24, frame.y() + 72);
++}
++
++void TestOverlay::Tick() {
++    const auto status = Nx2TestWindow::Get();
++    if (status.phase == Nx2TestWindow::Phase::None) {
++        hide();
++        return;
++    }
++    if (status.phase == Nx2TestWindow::Phase::Done) {
++        m_doneFor += TickMs / 1000.0;
++        if (m_doneFor > DoneShownSeconds) {
++            hide();
++            m_timer.stop();
++            return;
++        }
++    }
++    Place();
++    if (!isVisible()) {
++        show();
++    }
++    update();
++}
++
++void TestOverlay::paintEvent(QPaintEvent*) {
++    const auto status = Nx2TestWindow::Get();
++    QColor accent;
++    QString head;
++    QString line;
++    QString count;
++    double progress = 0.0;
++    switch (status.phase) {
++    case Nx2TestWindow::Phase::Waiting:
++        accent = QColor(240, 170, 40);
++        head = tr("TEST LICHII EN COURS");
++        line = QString::fromStdString(status.prepare);
++        count = tr("Enregistrement dans %1").arg(Clock(status.seconds_left));
++        break;
++    case Nx2TestWindow::Phase::Recording:
++        accent = QColor(230, 60, 60);
++        head = tr("● ENREGISTREMENT");
++        line = QString::fromStdString(status.label);
++        count = tr("Encore %1").arg(Clock(status.seconds_left));
++        progress = status.seconds_total > 0.0
++                       ? 1.0 - status.seconds_left / status.seconds_total
++                       : 0.0;
++        break;
++    case Nx2TestWindow::Phase::Done:
++        accent = QColor(70, 190, 100);
++        head = tr("✓ TEST TERMINÉ");
++        line = tr("Tu peux dire « fini » à Claude");
++        count = QString{};
++        progress = 1.0;
++        break;
++    default:
++        return;
++    }
++
++    QPainter painter(this);
++    painter.setRenderHint(QPainter::Antialiasing);
++    const QRectF box = rect().adjusted(1, 1, -1, -1);
++    QPainterPath path;
++    path.addRoundedRect(box, 10, 10);
++    painter.fillPath(path, QColor(20, 20, 24, 215));
++    painter.setPen(QPen(accent, 2));
++    painter.drawPath(path);
++
++    QFont font = painter.font();
++    font.setPixelSize(13);
++    font.setBold(true);
++    painter.setFont(font);
++    painter.setPen(accent);
++    painter.drawText(QRectF(16, 10, width() - 32, 20), Qt::AlignLeft | Qt::AlignVCenter, head);
++
++    font.setPixelSize(15);
++    font.setBold(true);
++    painter.setFont(font);
++    painter.setPen(Qt::white);
++    painter.drawText(QRectF(16, 34, width() - 32, 24), Qt::AlignLeft | Qt::AlignVCenter,
++                     painter.fontMetrics().elidedText(line, Qt::ElideRight, width() - 32));
++
++    font.setPixelSize(22);
++    font.setBold(true);
++    painter.setFont(font);
++    painter.drawText(QRectF(16, 60, width() - 32, 30), Qt::AlignLeft | Qt::AlignVCenter, count);
++
++    const QRectF bar(16, height() - 16, width() - 32, 5);
++    painter.fillRect(bar, QColor(255, 255, 255, 40));
++    painter.fillRect(QRectF(bar.x(), bar.y(), bar.width() * std::clamp(progress, 0.0, 1.0),
++                            bar.height()),
++                     accent);
++}
+diff --git a/src/yuzu/render/test_overlay.h b/src/yuzu/render/test_overlay.h
+new file mode 100644
+index 000000000..016d3489c
+--- /dev/null
++++ b/src/yuzu/render/test_overlay.h
+@@ -0,0 +1,32 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <QTimer>
++#include <QWidget>
++
++class MainWindow;
++
++/// A small panel at the top right of the window while a timed play test runs
++/// (Nx2TestWindow): what to do now, and a countdown to the recording and to its end.
++class TestOverlay : public QWidget {
++    Q_OBJECT
++
++public:
++    explicit TestOverlay(MainWindow* parent);
++
++    /// True when the loaded game has a test window to show.
++    static bool IsWanted();
++
++protected:
++    void paintEvent(QPaintEvent* event) override;
++
++private:
++    void Tick();
++    void Place();
++
++    MainWindow* m_mainWindow = nullptr;
++    QTimer m_timer;
++    double m_doneFor = 0.0; ///< Seconds the "done" message has been shown.
++};
+-- 
+2.43.0
+

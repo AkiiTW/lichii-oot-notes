@@ -1,0 +1,35 @@
+# Patch series
+
+Against `frizti-v3` (`00ef0ea6c`), in order. `git am patches/*.patch` applies all 29 cleanly (checked); the result matches AkiiTW/Lichii@d18e0af21 for `src/` and `.github/`. On a newer tree use `git am -3` or cherry-pick the commit.
+
+| Patch | Commit | Proposal |
+| --- | --- | --- |
+| [`01-nx2-L3-domain-thread-placement-pipeline-worker-cap-CPU-tuned.patch`](01-nx2-L3-domain-thread-placement-pipeline-worker-cap-CPU-tuned.patch) | [`f587285b1`](https://github.com/AkiiTW/Lichii/commit/f587285b1) | P07, P11 |
+| [`02-lichii-tuned-also-build-on-pushes-to-claude-oot-zen2-zen2-pr.patch`](02-lichii-tuned-also-build-on-pushes-to-claude-oot-zen2-zen2-pr.patch) | [`ab849a779`](https://github.com/AkiiTW/Lichii/commit/ab849a779) | P11 |
+| [`03-vulkan-EDEN_NX2_PIPELINE_EVICT_FRAMES-sets-or-turns-off-grap.patch`](03-vulkan-EDEN_NX2_PIPELINE_EVICT_FRAMES-sets-or-turns-off-grap.patch) | [`0d993c99f`](https://github.com/AkiiTW/Lichii/commit/0d993c99f) | P08 |
+| [`04-lichii-tuned-pass-ThinLTO-through-the-flags-CMake-s-IPO-chec.patch`](04-lichii-tuned-pass-ThinLTO-through-the-flags-CMake-s-IPO-chec.patch) | [`0e688990e`](https://github.com/AkiiTW/Lichii/commit/0e688990e) | P11 |
+| [`05-dist-placement-split-on-in-the-tuned-package-s-switches.patch`](05-dist-placement-split-on-in-the-tuned-package-s-switches.patch) | [`5321191db`](https://github.com/AkiiTW/Lichii/commit/5321191db) | P07 (dist) |
+| [`06-nx2-a-physical-core-each-for-the-GPU-front-and-back-OoT-PGO-.patch`](06-nx2-a-physical-core-each-for-the-GPU-front-and-back-OoT-PGO-.patch) | [`f24ea754c`](https://github.com/AkiiTW/Lichii/commit/f24ea754c) | P07, P11 |
+| [`07-lichii-tuned-drop-the-lto-flavor-its-binary-broke-Ocarina-at.patch`](07-lichii-tuned-drop-the-lto-flavor-its-binary-broke-Ocarina-at.patch) | [`cfc32ad55`](https://github.com/AkiiTW/Lichii/commit/cfc32ad55) | P11 |
+| [`08-dist-keep-textures-and-preload-pipelines-in-the-tuned-packag.patch`](08-dist-keep-textures-and-preload-pipelines-in-the-tuned-packag.patch) | [`fbd26bc32`](https://github.com/AkiiTW/Lichii/commit/fbd26bc32) | P08 (dist) |
+| [`09-lichii-tuned-instrument-only-the-GPU-emulation-in-the-pgogen.patch`](09-lichii-tuned-instrument-only-the-GPU-emulation-in-the-pgogen.patch) | [`669f3f5f0`](https://github.com/AkiiTW/Lichii/commit/669f3f5f0) | P11 |
+| [`10-shader_recompiler-instrument-it-for-the-GPU-PGO-profile-from.patch`](10-shader_recompiler-instrument-it-for-the-GPU-PGO-profile-from.patch) | [`2b5448ee8`](https://github.com/AkiiTW/Lichii/commit/2b5448ee8) | P11 |
+| [`11-vk_pipeline_cache-compare-new-pipelines-with-the-disk-cache-.patch`](11-vk_pipeline_cache-compare-new-pipelines-with-the-disk-cache-.patch) | [`c5810710d`](https://github.com/AkiiTW/Lichii/commit/c5810710d) | P04 (diagnostic EDEN_NX2_PIPELINE_DIFF; restructures the key comparison P04 builds on) |
+| [`12-vk_pipeline_cache-share-pipelines-that-differ-only-in-unread.patch`](12-vk_pipeline_cache-share-pipelines-that-differ-only-in-unread.patch) | [`1db14a304`](https://github.com/AkiiTW/Lichii/commit/1db14a304) | P04 |
+| [`13-vk_pipeline_cache-file-shared-cache-entries-under-this-drive.patch`](13-vk_pipeline_cache-file-shared-cache-entries-under-this-drive.patch) | [`e941a3b89`](https://github.com/AkiiTW/Lichii/commit/e941a3b89) | P04 (driver version); its dist TC threshold lines are the 9216/11264 values |
+| [`14-dist-fix-the-texture-cache-comment.patch`](14-dist-fix-the-texture-cache-comment.patch) | [`c031f3e3a`](https://github.com/AkiiTW/Lichii/commit/c031f3e3a) | not proposed (dist comment) |
+| [`15-Frizti-V3-Claude-no-PREFLUSH-by-default-tuned-builds-of-the-.patch`](15-Frizti-V3-Claude-no-PREFLUSH-by-default-tuned-builds-of-the-.patch) | [`30a75df6d`](https://github.com/AkiiTW/Lichii/commit/30a75df6d) | P05 (+ one workflow line) |
+| [`16-pgo-Ocarina-village-profile-from-the-cd1f029-pgogen-build.patch`](16-pgo-Ocarina-village-profile-from-the-cd1f029-pgogen-build.patch) | [`ba6836890`](https://github.com/AkiiTW/Lichii/commit/ba6836890) | P11 (pgo/README.md only; the .profraw is in the branch, not in the patch) |
+| [`17-video_core-MinGW-builds-of-the-host-pacer-MSVC-only-pragma-c.patch`](17-video_core-MinGW-builds-of-the-host-pacer-MSVC-only-pragma-c.patch) | [`19538b31a`](https://github.com/AkiiTW/Lichii/commit/19538b31a) | P06 |
+| [`18-Ocarina-of-Time-30-FPS-by-default-in-this-build.patch`](18-Ocarina-of-Time-30-FPS-by-default-in-this-build.patch) | [`43515fb50`](https://github.com/AkiiTW/Lichii/commit/43515fb50) | not proposed (30 FPS by default, AkiiTW's choice) |
+| [`19-common-EDEN_NX2_THREAD_USAGE-logs-each-named-thread-s-CPU-ti.patch`](19-common-EDEN_NX2_THREAD_USAGE-logs-each-named-thread-s-CPU-ti.patch) | [`eba617204`](https://github.com/AkiiTW/Lichii/commit/eba617204) | P09 |
+| [`20-Profiling-build-symbols-flavor-with-lichii.pdb-thread-usage-.patch`](20-Profiling-build-symbols-flavor-with-lichii.pdb-thread-usage-.patch) | [`715bf05ae`](https://github.com/AkiiTW/Lichii/commit/715bf05ae) | P09 (thread usage), P11 (symbols flavor) |
+| [`21-Name-threads-in-MinGW-builds-too-so-EDEN_NX2_SAMPLE-finds-th.patch`](21-Name-threads-in-MinGW-builds-too-so-EDEN_NX2_SAMPLE-finds-th.patch) | [`df6362759`](https://github.com/AkiiTW/Lichii/commit/df6362759) | P06 |
+| [`22-On-screen-countdown-for-timed-play-tests.patch`](22-On-screen-countdown-for-timed-play-tests.patch) | [`d8e4fe222`](https://github.com/AkiiTW/Lichii/commit/d8e4fe222) | P10 |
+| [`23-Profile-uniform-storage-and-texture-buffer-binds-apart-bound.patch`](23-Profile-uniform-storage-and-texture-buffer-binds-apart-bound.patch) | [`984269912`](https://github.com/AkiiTW/Lichii/commit/984269912) | P09 (zones), P06 (sampler walk) |
+| [`24-EDEN_NX2_BANK_COMPARE-upload-a-native-64-KiB-bank-again-only.patch`](24-EDEN_NX2_BANK_COMPARE-upload-a-native-64-KiB-bank-again-only.patch) | [`d4738fce0`](https://github.com/AkiiTW/Lichii/commit/d4738fce0) | P02 |
+| [`25-EDEN_NX2_TC_LOG-texture-uploads-by-kind-created-image-shapes.patch`](25-EDEN_NX2_TC_LOG-texture-uploads-by-kind-created-image-shapes.patch) | [`4cccf896c`](https://github.com/AkiiTW/Lichii/commit/4cccf896c) | P09 |
+| [`26-EDEN_NX2_TC_RT_NO_UPLOAD-new-render-targets-start-undefined-.patch`](26-EDEN_NX2_TC_RT_NO_UPLOAD-new-render-targets-start-undefined-.patch) | [`91498b2af`](https://github.com/AkiiTW/Lichii/commit/91498b2af) | P01 (=1) |
+| [`27-EDEN_NX2_TC_RT_NO_UPLOAD-2-also-skip-the-upload-of-new-depth.patch`](27-EDEN_NX2_TC_RT_NO_UPLOAD-2-also-skip-the-upload-of-new-depth.patch) | [`f9def68d9`](https://github.com/AkiiTW/Lichii/commit/f9def68d9) | P01 (=2) |
+| [`28-EDEN_NX2_TC_LOG-why-depth-images-still-get-uploaded.patch`](28-EDEN_NX2_TC_LOG-why-depth-images-still-get-uploaded.patch) | [`88730eb2a`](https://github.com/AkiiTW/Lichii/commit/88730eb2a) | P09 |
+| [`29-EDEN_NX2_TC_LOG-distinct-addresses-per-created-image-shape.patch`](29-EDEN_NX2_TC_LOG-distinct-addresses-per-created-image-shape.patch) | [`d18e0af21`](https://github.com/AkiiTW/Lichii/commit/d18e0af21) | P09 |

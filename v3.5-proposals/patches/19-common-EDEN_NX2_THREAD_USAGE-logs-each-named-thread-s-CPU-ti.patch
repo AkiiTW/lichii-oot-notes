@@ -1,0 +1,225 @@
+From eba6172041538ee3b1b15ce65b65dcca8f906607 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 02:50:05 +0100
+Subject: [PATCH] common: EDEN_NX2_THREAD_USAGE logs each named thread's CPU
+ time every 10 s
+
+Shows which thread a slow scene saturates (guest cores, GPU front or back, VulkanWorker; pools
+summed by name) and how much the unnamed ones take, without a profiler.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/common/CMakeLists.txt       |   2 +
+ src/common/nx2_thread_usage.cpp | 143 ++++++++++++++++++++++++++++++++
+ src/common/nx2_thread_usage.h   |  14 ++++
+ src/common/thread.cpp           |   2 +
+ 4 files changed, 161 insertions(+)
+ create mode 100644 src/common/nx2_thread_usage.cpp
+ create mode 100644 src/common/nx2_thread_usage.h
+
+diff --git a/src/common/CMakeLists.txt b/src/common/CMakeLists.txt
+index 51014c724..2a5cb1a6d 100644
+--- a/src/common/CMakeLists.txt
++++ b/src/common/CMakeLists.txt
+@@ -46,6 +46,8 @@ add_library(
+     dkb_cpu_trace.cpp
+     dkb_cpu_trace.h
+     nx2_placement.cpp
++    nx2_thread_usage.cpp
++    nx2_thread_usage.h
+     nx2_placement.h
+     nx2_sampler.cpp
+     nx2_sampler.h
+diff --git a/src/common/nx2_thread_usage.cpp b/src/common/nx2_thread_usage.cpp
+new file mode 100644
+index 000000000..def8186cc
+--- /dev/null
++++ b/src/common/nx2_thread_usage.cpp
+@@ -0,0 +1,143 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <algorithm>
++#include <chrono>
++#include <cstdlib>
++#include <functional>
++#include <map>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++#include <fmt/format.h>
++
++#include "common/common_types.h"
++#include "common/logging.h"
++#include "common/nx2_thread_usage.h"
++
++#ifdef _WIN32
++#include <windows.h>
++#endif
++
++namespace Common::Nx2ThreadUsage {
++
++namespace {
++
++bool Enabled() {
++    static const bool enabled = [] {
++        const char* const value = std::getenv("EDEN_NX2_THREAD_USAGE");
++        return value != nullptr && value[0] == '1';
++    }();
++    return enabled;
++}
++
++#ifdef _WIN32
++struct Entry {
++    HANDLE handle;
++    std::string name;
++    u64 last{};
++};
++
++std::mutex mutex;
++std::vector<Entry> entries;
++std::once_flag started;
++
++u64 FileTimeTo100ns(const FILETIME& time) {
++    return (u64{time.dwHighDateTime} << 32) | time.dwLowDateTime;
++}
++
++u64 ThreadTime(HANDLE handle) {
++    FILETIME creation{}, exit{}, kernel{}, user{};
++    if (!GetThreadTimes(handle, &creation, &exit, &kernel, &user)) {
++        return 0;
++    }
++    return FileTimeTo100ns(kernel) + FileTimeTo100ns(user);
++}
++
++u64 ProcessTime() {
++    FILETIME creation{}, exit{}, kernel{}, user{};
++    if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user)) {
++        return 0;
++    }
++    return FileTimeTo100ns(kernel) + FileTimeTo100ns(user);
++}
++
++void Monitor() {
++    constexpr auto window = std::chrono::seconds{10};
++    u64 last_process = ProcessTime();
++    auto last_time = std::chrono::steady_clock::now();
++    for (;;) {
++        std::this_thread::sleep_for(window);
++        const auto now = std::chrono::steady_clock::now();
++        const double wall_100ns =
++            std::chrono::duration<double>(now - last_time).count() * 1e7;
++        last_time = now;
++        const u64 process = ProcessTime();
++        const double process_percent =
++            static_cast<double>(process - last_process) / wall_100ns * 100.0;
++        last_process = process;
++
++        // Busy time per name: pools (worker threads sharing a name) are summed, with their count.
++        std::map<std::string, std::pair<double, u32>> by_name;
++        double named = 0.0;
++        {
++            std::scoped_lock lock{mutex};
++            for (Entry& entry : entries) {
++                const u64 total = ThreadTime(entry.handle);
++                const double percent =
++                    static_cast<double>(total - std::min(total, entry.last)) / wall_100ns * 100.0;
++                entry.last = total;
++                auto& [sum, count] = by_name[entry.name];
++                sum += percent;
++                ++count;
++                named += percent;
++            }
++        }
++        std::vector<std::pair<double, std::string>> sorted;
++        for (const auto& [name, usage] : by_name) {
++            if (usage.first >= 1.0) {
++                sorted.emplace_back(usage.first, usage.second > 1
++                                                     ? fmt::format("{} x{}", name, usage.second)
++                                                     : name);
++            }
++        }
++        std::sort(sorted.begin(), sorted.end(), std::greater<>{});
++        std::string line;
++        for (size_t i = 0; i < sorted.size() && i < 16; ++i) {
++            line += fmt::format(" | {} {:.0f}%", sorted[i].second, sorted[i].first);
++        }
++        LOG_INFO(Common, "Thread CPU last 10 s (100% = one logical CPU): process {:.0f}%, "
++                         "unnamed threads {:.0f}%{}",
++                 process_percent, std::max(0.0, process_percent - named), line);
++    }
++}
++#endif
++
++} // Anonymous namespace
++
++void OnThreadNamed(const char* name) {
++#ifdef _WIN32
++    if (!Enabled() || name == nullptr) {
++        return;
++    }
++    HANDLE handle{};
++    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &handle,
++                         THREAD_QUERY_LIMITED_INFORMATION, FALSE, 0)) {
++        return;
++    }
++    {
++        std::scoped_lock lock{mutex};
++        entries.push_back(Entry{handle, name, ThreadTime(handle)});
++    }
++    std::call_once(started, [] {
++        LOG_INFO(Common, "Thread CPU usage logged every 10 s (EDEN_NX2_THREAD_USAGE)");
++        std::thread{Monitor}.detach();
++    });
++#else
++    (void)name;
++#endif
++}
++
++} // namespace Common::Nx2ThreadUsage
+diff --git a/src/common/nx2_thread_usage.h b/src/common/nx2_thread_usage.h
+new file mode 100644
+index 000000000..b1087b15b
+--- /dev/null
++++ b/src/common/nx2_thread_usage.h
+@@ -0,0 +1,14 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++// EDEN_NX2_THREAD_USAGE=1: every 10 s, logs how much CPU time each named emulator thread used
++// (guest cores, GPU front and back, VulkanWorker, pools summed by name) and the whole process,
++// so a slow scene shows which thread is saturated: the GPU threads or the guest CPU.
++namespace Common::Nx2ThreadUsage {
++
++/// Registers the calling thread under `name` (from SetCurrentThreadName). No effect when off.
++void OnThreadNamed(const char* name);
++
++} // namespace Common::Nx2ThreadUsage
+diff --git a/src/common/thread.cpp b/src/common/thread.cpp
+index 869a4baa8..9c4db18e5 100644
+--- a/src/common/thread.cpp
++++ b/src/common/thread.cpp
+@@ -14,6 +14,7 @@
+ #include "common/event_wait.h"
+ #include "common/logging.h"
+ #include "common/nx2_sample_profile.h"
++#include "common/nx2_thread_usage.h"
+ #include "common/assert.h"
+ #include "common/thread.h"
+ #ifdef __APPLE__
+@@ -506,6 +507,7 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
+ 
+ void SetCurrentThreadName(const char* name) {
+     Nx2SampleProfile::OnThreadNamed(name);
++    Nx2ThreadUsage::OnThreadNamed(name);
+ #ifdef _MSC_VER
+     // Sets the debugger-visible name of the current thread.
+     if (auto pf = (decltype(&SetThreadDescription))(void*)GetProcAddress(GetModuleHandle(TEXT("KernelBase.dll")), "SetThreadDescription"); pf)
+-- 
+2.43.0
+

@@ -1,0 +1,29 @@
+From 5321191db283f718c820fc197b5c1f04b7358345 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 02:38:57 +0100
+Subject: [PATCH] dist: placement split on in the tuned package's switches
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ dist/nx2_switches.txt | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/dist/nx2_switches.txt b/dist/nx2_switches.txt
+index 884bc54ac..b2f9f0d19 100644
+--- a/dist/nx2_switches.txt
++++ b/dist/nx2_switches.txt
+@@ -26,8 +26,9 @@ EDEN_NX2_FENCE_BATCH=1
+ # Keep GPU, GPUBack and VulkanWorker on one L3 domain (CCX/CCD): their ring handoffs stop
+ # crossing the Infinity Fabric. "split" also keeps guest CPU cores and pipeline/texture workers
+ # on the other domains. Off by default; the log shows the masks ("Nx2Placement").
++# Ryzen 7 3800X, Ocarina in Kokiri Forest: split 28-29 FPS (24 before), wide view 24 (18-19).
++EDEN_NX2_PLACEMENT=split
+ #EDEN_NX2_PLACEMENT=gpu
+-#EDEN_NX2_PLACEMENT=split
+ # Which L3 domain gets the GPU threads (0 = the one with CPU 0; default: the last one).
+ #EDEN_NX2_PLACEMENT_DOMAIN=0
+ 
+-- 
+2.43.0
+

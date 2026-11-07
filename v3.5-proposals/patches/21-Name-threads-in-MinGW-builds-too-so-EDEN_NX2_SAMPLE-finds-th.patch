@@ -1,0 +1,44 @@
+From df6362759799928a16d18388fe5eb13e8dc4b21a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 14:02:06 +0100
+Subject: [PATCH] Name threads in MinGW builds too, so EDEN_NX2_SAMPLE finds
+ them
+
+SetThreadDescription was only called in MSVC builds; the clang/MinGW builds left every thread
+unnamed, and the built-in sampler, which finds its targets by that name, matched nothing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/common/thread.cpp | 15 +++++++++------
+ 1 file changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/src/common/thread.cpp b/src/common/thread.cpp
+index 9c4db18e5..aa8baf390 100644
+--- a/src/common/thread.cpp
++++ b/src/common/thread.cpp
+@@ -508,12 +508,15 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
+ void SetCurrentThreadName(const char* name) {
+     Nx2SampleProfile::OnThreadNamed(name);
+     Nx2ThreadUsage::OnThreadNamed(name);
+-#ifdef _MSC_VER
+-    // Sets the debugger-visible name of the current thread.
+-    if (auto pf = (decltype(&SetThreadDescription))(void*)GetProcAddress(GetModuleHandle(TEXT("KernelBase.dll")), "SetThreadDescription"); pf)
+-        pf(GetCurrentThread(), UTF8ToUTF16W(name).data()); // Windows 10+
+-    else
+-        ; // No-op
++#ifdef _WIN32
++    // Sets the debugger-visible name of the current thread (Windows 10+). MinGW builds need it
++    // too: the built-in sampler (EDEN_NX2_SAMPLE) finds threads by this name.
++    using SetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
++    if (const auto pf = reinterpret_cast<SetThreadDescriptionFn>(reinterpret_cast<void*>(
++            GetProcAddress(GetModuleHandleW(L"KernelBase.dll"), "SetThreadDescription")));
++        pf != nullptr) {
++        pf(GetCurrentThread(), UTF8ToUTF16W(name).data());
++    }
+ #elif  defined(__APPLE__)
+     pthread_setname_np(name);
+ #elif defined(__HAIKU__)
+-- 
+2.43.0
+

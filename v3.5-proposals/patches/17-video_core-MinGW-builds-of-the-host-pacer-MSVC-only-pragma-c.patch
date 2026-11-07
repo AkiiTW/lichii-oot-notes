@@ -1,0 +1,45 @@
+From 19538b31aff5c9dc480b8d5a5e9fddb2aad61dfe Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 00:52:05 +0100
+Subject: [PATCH] video_core: MinGW builds of the host pacer: MSVC-only #pragma
+ comment, link dwmapi
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/video_core/CMakeLists.txt                    | 6 ++++++
+ src/video_core/renderer_vulkan/vk_host_pacer.cpp | 2 ++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/src/video_core/CMakeLists.txt b/src/video_core/CMakeLists.txt
+index aa98e4bf2..23b2b4a3f 100644
+--- a/src/video_core/CMakeLists.txt
++++ b/src/video_core/CMakeLists.txt
+@@ -564,3 +564,9 @@ if (LICHII_PGO_GENERATE_GPU)
+     target_compile_options(video_core PRIVATE -fprofile-generate)
+     # shader_recompiler is instrumented in its own CMakeLists.txt (added after this one).
+ endif()
++
++# vk_host_pacer.cpp reads the compositor's timing (DwmGetCompositionTimingInfo); MSVC links it
++# through a #pragma, MinGW needs the library named.
++if (WIN32)
++    target_link_libraries(video_core PRIVATE dwmapi)
++endif()
+diff --git a/src/video_core/renderer_vulkan/vk_host_pacer.cpp b/src/video_core/renderer_vulkan/vk_host_pacer.cpp
+index e32489577..a6fa7072b 100644
+--- a/src/video_core/renderer_vulkan/vk_host_pacer.cpp
++++ b/src/video_core/renderer_vulkan/vk_host_pacer.cpp
+@@ -12,8 +12,10 @@
+ #ifdef _WIN32
+ #include <windows.h>
+ #include <dwmapi.h>
++#ifdef _MSC_VER
+ #pragma comment(lib, "dwmapi.lib")
+ #endif
++#endif
+ 
+ namespace Vulkan {
+ namespace {
+-- 
+2.43.0
+

@@ -1,0 +1,661 @@
+From f587285b158c709a35ab1603fceade2440755f58 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 00:20:00 +0100
+Subject: [PATCH] nx2: L3-domain thread placement, pipeline worker cap,
+ CPU-tuned Windows workflow
+
+EDEN_NX2_PLACEMENT=gpu|split keeps the GPU front, GPUBack and VulkanWorker on one L3
+domain (Zen 2 CCX) and, with split, the guest cores and background workers on the others.
+EDEN_NX2_PIPELINE_WORKERS caps the pipeline builders. Both are off unless set.
+
+lichii-tuned.yml builds the MinGW clang PGO binary with YUZU_BUILD_PRESET (default zen2),
+with and without ThinLTO, as artifacts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ .github/workflows/lichii-tuned.yml            | 156 ++++++++++
+ dist/nx2_switches.txt                         |  12 +
+ src/common/CMakeLists.txt                     |   2 +
+ src/common/nx2_placement.cpp                  | 267 ++++++++++++++++++
+ src/common/nx2_placement.h                    |  30 ++
+ src/common/thread_worker.h                    |   2 +
+ src/core/cpu_manager.cpp                      |   2 +
+ src/video_core/gpu_split.cpp                  |   2 +
+ src/video_core/gpu_thread.cpp                 |   2 +
+ .../renderer_vulkan/vk_pipeline_cache.cpp     |   8 +
+ .../renderer_vulkan/vk_scheduler.cpp          |   2 +
+ 11 files changed, 485 insertions(+)
+ create mode 100644 .github/workflows/lichii-tuned.yml
+ create mode 100644 src/common/nx2_placement.cpp
+ create mode 100644 src/common/nx2_placement.h
+
+diff --git a/.github/workflows/lichii-tuned.yml b/.github/workflows/lichii-tuned.yml
+new file mode 100644
+index 000000000..5b8f5f27b
+--- /dev/null
++++ b/.github/workflows/lichii-tuned.yml
+@@ -0,0 +1,156 @@
++name: lichii-tuned
++
++# Windows build tuned for one CPU family: MSYS2 clang with the repo's PGO profile (as the
++# windows-x86_64-pgo release job), plus -march/-mtune from YUZU_BUILD_PRESET and, in the second
++# job, ThinLTO. Manual runs only; the two binaries are uploaded as artifacts, no release is made.
++on:
++  workflow_dispatch:
++    inputs:
++      preset:
++        description: CPU preset (zen2 = Ryzen 3000, zen4 = Ryzen 7000, v3 = any AVX2 CPU)
++        type: choice
++        options: [zen2, zen4, v3, generic]
++        default: zen2
++
++permissions:
++  contents: read
++
++jobs:
++  build:
++    name: windows ${{ inputs.preset }}${{ matrix.lto && ' + LTO' || '' }}
++    runs-on: windows-2022
++    timeout-minutes: 350
++    strategy:
++      fail-fast: false
++      matrix:
++        lto: [false, true]
++    env:
++      CCACHE_DIR: ${{ github.workspace }}/.ccache
++      CCACHE_MAXSIZE: 3000M
++      CCACHE_COMPILERCHECK: content
++    steps:
++      - name: Check out source
++        uses: actions/checkout@v5
++
++      - name: Check PGO profile
++        shell: bash
++        run: test -s eglantine.profdata
++
++      - name: Set up MSYS2
++        uses: msys2/setup-msys2@v2
++        with:
++          msystem: UCRT64
++          update: true
++          cache: true
++          install: >-
++            git make autoconf libtool automake-wrapper patch jq pactoys ninja
++          pacboy: >-
++            toolchain:p clang:p lld:p cmake:p python-pip:p
++            qt6-base:p qt6-charts:p qt6-tools:p qt6-translations:p qt6-svg:p
++            openssl:p boost:p fmt:p lz4:p nlohmann-json:p zlib:p zstd:p libiconv:p
++            vulkan-memory-allocator:p vulkan-devel:p glslang:p enet:p opus:p
++            libusb:p unordered_dense:p jbigkit:p xz:p libdeflate:p bzip2:p
++            lerc:p graphite2:p libwebp:p libtiff:p brotli:p ccache:p
++
++      - name: Restore CPM downloads
++        uses: actions/cache/restore@v5
++        with:
++          path: .cache/cpm
++          key: cpm-windows-x86_64-pgo-v2-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'CMakeModules/CPM*.cmake', 'externals/**/CMakeLists.txt', 'src/**/CMakeLists.txt') }}
++          restore-keys: |
++            cpm-windows-x86_64-pgo-v2-
++            cpm-Windows-
++
++      - name: Restore compiler objects
++        id: compiler-cache
++        uses: actions/cache/restore@v5
++        with:
++          path: .ccache
++          key: objects-tuned-${{ inputs.preset }}-${{ matrix.lto }}-${{ github.sha }}-${{ github.run_id }}
++          restore-keys: |
++            objects-tuned-${{ inputs.preset }}-${{ matrix.lto }}-
++
++      - name: Configure
++        shell: msys2 {0}
++        run: |
++          set -euo pipefail
++          profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
++            -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
++          cmake -S . -B build/release -G Ninja \
++            -DCMAKE_BUILD_TYPE=Release \
++            -DBUILD_TESTING=OFF \
++            -DYUZU_TESTS=OFF \
++            -DYUZU_CMD=ON \
++            -DYUZU_ROOM=OFF \
++            -DYUZU_ROOM_STANDALONE=OFF \
++            -DYUZU_USE_BUNDLED_QT=OFF \
++            -DYUZU_USE_BUNDLED_SDL3=ON \
++            -DYUZU_USE_BUNDLED_FFMPEG=ON \
++            -DVulkanHeaders_FORCE_BUNDLED=ON \
++            -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
++            -DENABLE_UPDATE_CHECKER=OFF \
++            -DLICHII_BUILD_TAG=tuned-${{ inputs.preset }}-${{ github.run_number }} \
++            -DLICHII_BUILD_PLATFORM=windows-x86_64-${{ inputs.preset }} \
++            -DUSE_DISCORD_PRESENCE=OFF \
++            -DUSE_CCACHE=ON \
++            -DYUZU_BUILD_PRESET=${{ inputs.preset }} \
++            -DENABLE_LTO=${{ matrix.lto && 'ON' || 'OFF' }} \
++            -DCMAKE_C_COMPILER=clang \
++            -DCMAKE_CXX_COMPILER=clang++ \
++            -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
++            "-DCMAKE_C_FLAGS=$profile" \
++            "-DCMAKE_CXX_FLAGS=$profile"
++
++      - name: Build
++        shell: msys2 {0}
++        run: |
++          ccache --zero-stats
++          cmake --build build/release --target yuzu yuzu-cmd --parallel
++          ccache --show-stats
++
++      - name: Save compiler objects
++        if: always() && steps.compiler-cache.outcome == 'success'
++        uses: actions/cache/save@v5
++        with:
++          path: .ccache
++          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
++
++      # Same packaging as the release workflow's MinGW job (docs/Caveats.md#msys2).
++      - name: Package
++        shell: msys2 {0}
++        run: |
++          set -euo pipefail
++          export PATH="/ucrt64/bin:$PATH"
++          cd build/release/bin
++          test -f lichii.exe
++          test -f eden-cli.exe
++          windeployqt6 --no-translations --no-compiler-runtime --no-opengl-sw \
++            --no-system-dxc-compiler --no-system-d3d-compiler lichii.exe
++          deps() {
++            objdump -p "$1" | awk '/DLL Name:/ {print $3}' | while read -r dll; do
++              [ -z "$dll" ] && continue
++              source=$(command -v "$dll" 2>/dev/null || true)
++              [ -z "$source" ] && continue
++              case "$source" in
++                *System32* | *SysWOW64*) continue ;;
++              esac
++              if [ ! -f "$dll" ]; then
++                cp "$source" "$dll"
++                deps "$source"
++              fi
++            done
++          }
++          for exe in lichii.exe eden-cli.exe; do
++            deps "$exe"
++          done
++          find . -name '*.dll' | while read -r dll; do
++            deps "$dll"
++          done
++
++      - name: Upload
++        uses: actions/upload-artifact@v7
++        with:
++          name: lichii-windows-${{ inputs.preset }}${{ matrix.lto && '-lto' || '' }}-${{ github.sha }}
++          path: build/release/bin/
++          if-no-files-found: error
++          retention-days: 14
+diff --git a/dist/nx2_switches.txt b/dist/nx2_switches.txt
+index 5c7501280..a37e4d940 100644
+--- a/dist/nx2_switches.txt
++++ b/dist/nx2_switches.txt
+@@ -22,6 +22,18 @@ EDEN_NX2_FENCE_BATCH=1
+ # Enable only if frame pacing stability is preferred over responsive controls.
+ #EDEN_NX2_FRAMES_AHEAD=2
+ 
++# --- Experiments: CPUs with several L3 domains (Ryzen 3000/5000 with 8+ cores) ---
++# Keep GPU, GPUBack and VulkanWorker on one L3 domain (CCX/CCD): their ring handoffs stop
++# crossing the Infinity Fabric. "split" also keeps guest CPU cores and pipeline/texture workers
++# on the other domains. Off by default; the log shows the masks ("Nx2Placement").
++#EDEN_NX2_PLACEMENT=gpu
++#EDEN_NX2_PLACEMENT=split
++# Which L3 domain gets the GPU threads (0 = the one with CPU 0; default: the last one).
++#EDEN_NX2_PLACEMENT_DOMAIN=0
++
++# Cap the pipeline (shader) builder threads (default: logical processors - 1).
++#EDEN_NX2_PIPELINE_WORKERS=6
++
+ # --- Workarounds / Debug ---
+ # Terrain/indirect drawing fix for Donkey Kong Bananza: enabled by default. Set to 0 only to leave to GPU.
+ #EDEN_NX2_RESETFIX=0
+diff --git a/src/common/CMakeLists.txt b/src/common/CMakeLists.txt
+index 4e1d798dc..51014c724 100644
+--- a/src/common/CMakeLists.txt
++++ b/src/common/CMakeLists.txt
+@@ -45,6 +45,8 @@ add_library(
+     div_ceil.h
+     dkb_cpu_trace.cpp
+     dkb_cpu_trace.h
++    nx2_placement.cpp
++    nx2_placement.h
+     nx2_sampler.cpp
+     nx2_sampler.h
+     dynamic_library.cpp
+diff --git a/src/common/nx2_placement.cpp b/src/common/nx2_placement.cpp
+new file mode 100644
+index 000000000..6d7067f8f
+--- /dev/null
++++ b/src/common/nx2_placement.cpp
+@@ -0,0 +1,267 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include <algorithm>
++#include <bit>
++#include <cstdlib>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include <fmt/format.h>
++
++#include "common/common_types.h"
++#include "common/logging.h"
++#include "common/nx2_placement.h"
++
++#ifdef _WIN32
++#include <windows.h>
++#elif defined(__linux__)
++#include <fstream>
++#include <set>
++#include <sstream>
++#include <string>
++#include <sched.h>
++#endif
++
++namespace Common::Nx2Placement {
++
++namespace {
++
++enum class Mode { Off, Gpu, Split };
++
++struct Plan {
++    Mode mode{Mode::Off};
++    u64 gpu{};
++    u64 rest{};
++};
++
++#ifdef _WIN32
++std::vector<u64> QueryDomains() {
++    DWORD length = 0;
++    GetLogicalProcessorInformationEx(RelationCache, nullptr, &length);
++    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || length == 0) {
++        return {};
++    }
++    std::vector<u8> buffer(length);
++    auto* const first = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data());
++    if (!GetLogicalProcessorInformationEx(RelationCache, first, &length)) {
++        return {};
++    }
++    std::vector<u64> domains;
++    for (DWORD offset = 0; offset < length;) {
++        const auto* const info =
++            reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + offset);
++        if (info->Size == 0) {
++            break;
++        }
++        if (info->Relationship == RelationCache && info->Cache.Level == 3 &&
++            (info->Cache.Type == CacheUnified || info->Cache.Type == CacheData) &&
++            info->Cache.GroupMask.Group == 0 && info->Cache.GroupMask.Mask != 0) {
++            domains.push_back(static_cast<u64>(info->Cache.GroupMask.Mask));
++        }
++        offset += info->Size;
++    }
++    return domains;
++}
++
++u64 ProcessMask() {
++    DWORD_PTR process{};
++    DWORD_PTR system{};
++    if (!GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) {
++        return 0;
++    }
++    return static_cast<u64>(process);
++}
++
++bool SetMask(u64 mask) {
++    return SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(mask)) != 0;
++}
++#elif defined(__linux__)
++u64 ParseCpuList(const std::string& list) {
++    u64 mask = 0;
++    std::stringstream stream{list};
++    std::string range;
++    while (std::getline(stream, range, ',')) {
++        const size_t dash = range.find('-');
++        const int low = std::atoi(range.substr(0, dash).c_str());
++        const int high = dash == std::string::npos ? low : std::atoi(range.substr(dash + 1).c_str());
++        for (int cpu = low; cpu <= high && cpu < 64; ++cpu) {
++            mask |= u64{1} << cpu;
++        }
++    }
++    return mask;
++}
++
++std::vector<u64> QueryDomains() {
++    std::set<u64> unique;
++    for (int cpu = 0; cpu < 64; ++cpu) {
++        const std::string base = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cache/";
++        for (int index = 0; index < 8; ++index) {
++            std::ifstream level_file{base + "index" + std::to_string(index) + "/level"};
++            int level = 0;
++            if (!(level_file >> level)) {
++                break;
++            }
++            if (level != 3) {
++                continue;
++            }
++            std::ifstream list_file{base + "index" + std::to_string(index) + "/shared_cpu_list"};
++            std::string list;
++            if (std::getline(list_file, list)) {
++                if (const u64 mask = ParseCpuList(list); mask != 0) {
++                    unique.insert(mask);
++                }
++            }
++        }
++    }
++    return {unique.begin(), unique.end()};
++}
++
++u64 ProcessMask() {
++    cpu_set_t set;
++    CPU_ZERO(&set);
++    if (sched_getaffinity(0, sizeof(set), &set) != 0) {
++        return 0;
++    }
++    u64 mask = 0;
++    for (int cpu = 0; cpu < 64; ++cpu) {
++        if (CPU_ISSET(cpu, &set)) {
++            mask |= u64{1} << cpu;
++        }
++    }
++    return mask;
++}
++
++bool SetMask(u64 mask) {
++    cpu_set_t set;
++    CPU_ZERO(&set);
++    for (int cpu = 0; cpu < 64; ++cpu) {
++        if ((mask >> cpu) & 1) {
++            CPU_SET(cpu, &set);
++        }
++    }
++    return sched_setaffinity(0, sizeof(set), &set) == 0;
++}
++#else
++std::vector<u64> QueryDomains() {
++    return {};
++}
++u64 ProcessMask() {
++    return 0;
++}
++bool SetMask(u64) {
++    return false;
++}
++#endif
++
++Mode ReadMode() {
++    const char* const value = std::getenv("EDEN_NX2_PLACEMENT");
++    const std::string_view mode = value != nullptr ? value : "";
++    if (mode == "gpu" || mode == "1") {
++        return Mode::Gpu;
++    }
++    if (mode == "split" || mode == "2") {
++        return Mode::Split;
++    }
++    return Mode::Off;
++}
++
++Plan MakePlan() {
++    Plan plan{.mode = ReadMode()};
++    if (plan.mode == Mode::Off) {
++        return plan;
++    }
++    const u64 process = ProcessMask();
++    if (process == 0) {
++        LOG_WARNING(Common, "Nx2Placement: process affinity unavailable, placement off");
++        plan.mode = Mode::Off;
++        return plan;
++    }
++    u64 gpu = 0;
++    if (const char* manual = std::getenv("EDEN_NX2_PLACEMENT_GPU"); manual != nullptr) {
++        gpu = std::strtoull(manual, nullptr, 16);
++    } else {
++        const std::vector<u64> domains = QueryDomains();
++        std::string listed;
++        for (const u64 domain : domains) {
++            listed += fmt::format(" {:#x}", domain);
++        }
++        LOG_INFO(Common, "Nx2Placement: L3 domains:{}", listed.empty() ? " none" : listed);
++        if (domains.size() < 2) {
++            LOG_INFO(Common, "Nx2Placement: a single L3 domain, nothing to place");
++            plan.mode = Mode::Off;
++            return plan;
++        }
++        size_t index = domains.size() - 1;
++        if (const char* chosen = std::getenv("EDEN_NX2_PLACEMENT_DOMAIN"); chosen != nullptr) {
++            index = std::min<size_t>(std::strtoul(chosen, nullptr, 10), domains.size() - 1);
++        }
++        gpu = domains[index];
++    }
++    plan.gpu = gpu & process;
++    plan.rest = process & ~plan.gpu;
++    // Three busy GPU threads need at least two cores; the rest needs somewhere to run.
++    if (std::popcount(plan.gpu) < 2 || plan.rest == 0) {
++        LOG_WARNING(Common, "Nx2Placement: unusable masks gpu={:#x} rest={:#x}, placement off",
++                    plan.gpu, plan.rest);
++        plan.mode = Mode::Off;
++        return plan;
++    }
++    LOG_INFO(Common, "Nx2Placement: mode={} gpu={:#x} rest={:#x}",
++             plan.mode == Mode::Gpu ? "gpu" : "split", plan.gpu, plan.rest);
++    return plan;
++}
++
++const Plan& GetPlan() {
++    static const Plan plan = MakePlan();
++    return plan;
++}
++
++constexpr const char* RoleName(Role role) {
++    switch (role) {
++    case Role::GpuFront:
++        return "GPU";
++    case Role::GpuBack:
++        return "GPUBack";
++    case Role::VulkanWorker:
++        return "VulkanWorker";
++    case Role::GuestCore:
++        return "guest core";
++    case Role::Background:
++        return "background worker";
++    }
++    return "?";
++}
++
++} // Anonymous namespace
++
++void Apply(Role role) {
++    const Plan& plan = GetPlan();
++    if (plan.mode == Mode::Off) {
++        return;
++    }
++    u64 mask = 0;
++    switch (role) {
++    case Role::GpuFront:
++    case Role::GpuBack:
++    case Role::VulkanWorker:
++        mask = plan.gpu;
++        break;
++    case Role::GuestCore:
++    case Role::Background:
++        mask = plan.mode == Mode::Split ? plan.rest : 0;
++        break;
++    }
++    if (mask == 0) {
++        return;
++    }
++    if (!SetMask(mask)) {
++        LOG_WARNING(Common, "Nx2Placement: could not place a {} thread on {:#x}", RoleName(role),
++                    mask);
++    } else if (role != Role::Background) {
++        LOG_INFO(Common, "Nx2Placement: {} thread on {:#x}", RoleName(role), mask);
++    }
++}
++
++} // namespace Common::Nx2Placement
+diff --git a/src/common/nx2_placement.h b/src/common/nx2_placement.h
+new file mode 100644
+index 000000000..267a59802
+--- /dev/null
++++ b/src/common/nx2_placement.h
+@@ -0,0 +1,30 @@
++// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++// EXPERIMENT: thread placement by L3 cache domain (Zen 2 CCX, Zen 3/4 CCD). The GPU front and
++// back threads hand every method to each other through a shared ring; when Windows puts them on
++// two CCXs, each handoff and every ring line crosses the Infinity Fabric.
++//
++// EDEN_NX2_PLACEMENT=gpu    GPU, GPUBack and VulkanWorker are kept on one L3 domain.
++// EDEN_NX2_PLACEMENT=split  as gpu, and guest CPU cores, pipeline builders and texture workers
++//                           are kept off that domain (they no longer share its SMT siblings).
++// EDEN_NX2_PLACEMENT=off    (default) no change.
++// EDEN_NX2_PLACEMENT_DOMAIN=<n> picks the L3 domain for the GPU threads (default: the last one,
++// away from CPU 0 and its interrupts). EDEN_NX2_PLACEMENT_GPU=<hex mask> sets the GPU threads'
++// logical processors by hand (processor group 0), the rest gets the complement.
++namespace Common::Nx2Placement {
++
++enum class Role {
++    GpuFront,
++    GpuBack,
++    VulkanWorker,
++    GuestCore,
++    Background,
++};
++
++/// Applies the placement for `role` to the calling thread. No effect unless enabled.
++void Apply(Role role);
++
++} // namespace Common::Nx2Placement
+diff --git a/src/common/thread_worker.h b/src/common/thread_worker.h
+index 791586f2b..421ed5aea 100644
+--- a/src/common/thread_worker.h
++++ b/src/common/thread_worker.h
+@@ -17,6 +17,7 @@
+ #include <queue>
+ 
+ #include "common/polyfill_thread.h"
++#include "common/nx2_placement.h"
+ #include "common/thread.h"
+ #include "common/unique_function.h"
+ 
+@@ -44,6 +45,7 @@ public:
+             Common::SetCurrentThreadName(thread_name.c_str());
+             if (placement != ThreadPlacement::Default) {
+                 Common::SetCurrentThreadPriority(ThreadPriority::Low);
++                Nx2Placement::Apply(Nx2Placement::Role::Background);
+             }
+             switch (placement) {
+             case ThreadPlacement::Efficiency:
+diff --git a/src/core/cpu_manager.cpp b/src/core/cpu_manager.cpp
+index 427959508..c32dacc3b 100644
+--- a/src/core/cpu_manager.cpp
++++ b/src/core/cpu_manager.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "common/dkb_cpu_trace.h"
+ #include "common/fiber.h"
++#include "common/nx2_placement.h"
+ #include "common/scope_exit.h"
+ #include "common/thread.h"
+ #include "common/settings.h"
+@@ -181,6 +182,7 @@ void CpuManager::RunThread(std::stop_token token, std::size_t core) {
+     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+     Common::SetCurrentThreadToPerformanceCores();
+     Common::PinCurrentThread(Common::PinnedRole::GuestCore);
++    Common::Nx2Placement::Apply(Common::Nx2Placement::Role::GuestCore);
+     auto& data = core_data[core];
+     data.host_context = Common::Fiber::ThreadToFiber();
+ 
+diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
+index ffcfce7fc..b121a2fc5 100644
+--- a/src/video_core/gpu_split.cpp
++++ b/src/video_core/gpu_split.cpp
+@@ -19,6 +19,7 @@
+ 
+ #include "common/dkb_cpu_trace.h"
+ #include "common/logging.h"
++#include "common/nx2_placement.h"
+ #include "common/settings.h"
+ #include "common/thread.h"
+ #include "core/core.h"
+@@ -816,6 +817,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
+     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+     Common::PinCurrentThread(Common::PinnedRole::GpuBack);
+     Common::SetCurrentThreadToPerformanceCores();
++    Common::Nx2Placement::Apply(Common::Nx2Placement::Role::GpuBack);
+     system->RegisterHostThread();
+ #ifdef _WIN32
+     g_back_thread_id.store(GetCurrentThreadId(), std::memory_order_relaxed);
+diff --git a/src/video_core/gpu_thread.cpp b/src/video_core/gpu_thread.cpp
+index 0af6c4cea..29d5ecc78 100644
+--- a/src/video_core/gpu_thread.cpp
++++ b/src/video_core/gpu_thread.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "common/assert.h"
+ #include "common/dkb_cpu_trace.h"
++#include "common/nx2_placement.h"
+ #include "common/scope_exit.h"
+ #include "common/settings.h"
+ #include "common/thread.h"
+@@ -54,6 +55,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
+         Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+         Common::PinCurrentThread(Common::PinnedRole::GpuFront);
+         Common::SetCurrentThreadToPerformanceCores();
++        Common::Nx2Placement::Apply(Common::Nx2Placement::Role::GpuFront);
+         system.RegisterHostThread();
+ 
+         auto current_context = context.Acquire();
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index beeea2cef..45d6cc352 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -403,6 +403,14 @@ size_t GetTotalPipelineWorkers() {
+     }
+     return std::min(max_core_threads, desired);
+ #else
++    // EXPERIMENT: EDEN_NX2_PIPELINE_WORKERS=<n> caps the builders. With one per logical
++    // processor, a burst of new pipelines also takes the SMT siblings of the GPU threads.
++    if (const char* value = std::getenv("EDEN_NX2_PIPELINE_WORKERS"); value != nullptr) {
++        const long requested = std::strtol(value, nullptr, 10);
++        if (requested > 0) {
++            return std::min(max_core_threads, static_cast<size_t>(requested));
++        }
++    }
+     return max_core_threads;
+ #endif
+ }
+diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
+index 62837c0b3..31fc171f3 100644
+--- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
++++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
+@@ -23,6 +23,7 @@
+ #include "common/logging.h"
+ #include "common/settings.h"
+ #include "common/dkb_cpu_trace.h"
++#include "common/nx2_placement.h"
+ #include "common/thread.h"
+ #include "video_core/gpu_logging/gpu_logging.h"
+ #include "video_core/nx2_perf.h"
+@@ -514,6 +515,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
+     const Common::DkbCpuTrace::Registration trace_thread{Common::DkbCpuTrace::Role::VulkanWorker};
+     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+     Common::SetCurrentThreadToPerformanceCores();
++    Common::Nx2Placement::Apply(Common::Nx2Placement::Role::VulkanWorker);
+ 
+     const auto TryPopQueue{[this](auto& work) -> bool {
+         if (work_queue.empty()) {
+-- 
+2.43.0
+

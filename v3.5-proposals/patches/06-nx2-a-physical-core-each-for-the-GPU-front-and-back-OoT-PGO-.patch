@@ -1,0 +1,340 @@
+From f24ea754ce465ee50b712d33bdb4377e6deb85b1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 02:56:43 +0100
+Subject: [PATCH] nx2: a physical core each for the GPU front and back; OoT PGO
+ workflow flavor
+
+EDEN_NX2_PLACEMENT puts the split's front and back on a physical core each (both SMT
+siblings) inside the GPU L3 domain and VulkanWorker on the domain's other cores, so a front
+spinning on the back never shares its core (EDEN_NX2_PLACEMENT_CORES=0: shared domain).
+
+lichii-tuned gains a pgogen flavor (instrumented build) and merges .profraw files committed
+under pgo/ into the profile of the normal and lto flavors.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ .github/workflows/lichii-tuned.yml | 92 +++++++++++++++++++++++++-----
+ pgo/README.md                      |  7 +++
+ src/common/nx2_placement.cpp       | 82 +++++++++++++++++++++++++-
+ src/common/nx2_placement.h         |  3 +
+ 4 files changed, 168 insertions(+), 16 deletions(-)
+ create mode 100644 pgo/README.md
+
+diff --git a/.github/workflows/lichii-tuned.yml b/.github/workflows/lichii-tuned.yml
+index fe94dd14e..8ce7ec7ab 100644
+--- a/.github/workflows/lichii-tuned.yml
++++ b/.github/workflows/lichii-tuned.yml
+@@ -1,8 +1,14 @@
+ name: lichii-tuned
+ 
+-# Windows build tuned for one CPU family: MSYS2 clang with the repo's PGO profile (as the
+-# windows-x86_64-pgo release job), plus -march/-mtune from YUZU_BUILD_PRESET and, in the second
+-# job, ThinLTO. Manual runs only; the two binaries are uploaded as artifacts, no release is made.
++# Windows build tuned for one CPU family: MSYS2 clang with a PGO profile, plus -march/-mtune from
++# YUZU_BUILD_PRESET. Three flavors, uploaded as artifacts (no release is made):
++#   normal  the PGO build;
++#   lto     the same with ThinLTO;
++#   pgogen  an instrumented build (-fprofile-generate) that writes default_*.profraw next to
++#           lichii.exe when it exits normally.
++# Profiles: .profraw files (or .zip archives of them) committed under pgo/ are merged into the
++# profile the normal and lto flavors use, weighted over eglantine.profdata; without them,
++# eglantine.profdata alone is used.
+ on:
+   workflow_dispatch:
+     inputs:
+@@ -18,6 +24,7 @@ on:
+       - "src/**"
+       - "CMakeLists.txt"
+       - "dist/**"
++      - "pgo/**"
+       - ".github/workflows/lichii-tuned.yml"
+ 
+ permissions:
+@@ -25,13 +32,13 @@ permissions:
+ 
+ jobs:
+   build:
+-    name: windows ${{ inputs.preset || 'zen2' }}${{ matrix.lto && ' + LTO' || '' }}
++    name: windows ${{ inputs.preset || 'zen2' }} ${{ matrix.flavor }}
+     runs-on: windows-2022
+     timeout-minutes: 350
+     strategy:
+       fail-fast: false
+       matrix:
+-        lto: [false, true]
++        flavor: [normal, lto, pgogen]
+     env:
+       CCACHE_DIR: ${{ github.workspace }}/.ccache
+       CCACHE_MAXSIZE: 3000M
+@@ -51,9 +58,9 @@ jobs:
+           update: true
+           cache: true
+           install: >-
+-            git make autoconf libtool automake-wrapper patch jq pactoys ninja
++            git make autoconf libtool automake-wrapper patch jq pactoys ninja unzip
+           pacboy: >-
+-            toolchain:p clang:p lld:p cmake:p python-pip:p
++            toolchain:p clang:p lld:p cmake:p python-pip:p compiler-rt:p llvm-tools:p
+             qt6-base:p qt6-charts:p qt6-tools:p qt6-translations:p qt6-svg:p
+             openssl:p boost:p fmt:p lz4:p nlohmann-json:p zlib:p zstd:p libiconv:p
+             vulkan-memory-allocator:p vulkan-devel:p glslang:p enet:p opus:p
+@@ -74,25 +81,84 @@ jobs:
+         uses: actions/cache/restore@v5
+         with:
+           path: .ccache
+-          key: objects-tuned-${{ inputs.preset || 'zen2' }}-${{ matrix.lto }}-${{ github.sha }}-${{ github.run_id }}
++          key: objects-tuned-${{ inputs.preset || 'zen2' }}-${{ matrix.flavor }}-${{ github.sha }}-${{ github.run_id }}
+           restore-keys: |
+-            objects-tuned-${{ inputs.preset || 'zen2' }}-${{ matrix.lto }}-
++            objects-tuned-${{ inputs.preset || 'zen2' }}-${{ matrix.flavor }}-
++
++      # The profile runtime must link and its output must merge before an hour of instrumented
++      # build. MSYS2 may ship compiler-rt for another clang version than the compiler: its
++      # library is then copied where this clang looks for it.
++      - name: Check the profile runtime
++        if: matrix.flavor == 'pgogen'
++        shell: msys2 {0}
++        run: |
++          set -euo pipefail
++          cd "$(mktemp -d)"
++          printf 'int main(void) { return 0; }\n' > t.c
++          if ! clang -fprofile-generate -fuse-ld=lld t.c -o t.exe; then
++            lib=$(ls /ucrt64/lib/clang/*/lib/windows/libclang_rt.profile-x86_64.a | head -n 1)
++            dir=$(clang -print-runtime-dir)
++            echo "Copying $lib to $dir"
++            mkdir -p "$dir" "$(clang -print-resource-dir)/lib/windows"
++            cp "$lib" "$dir/libclang_rt.profile.a"
++            cp "$lib" "$dir/libclang_rt.profile-x86_64.a"
++            cp "$lib" "$(clang -print-resource-dir)/lib/windows/libclang_rt.profile-x86_64.a"
++            clang -fprofile-generate -fuse-ld=lld t.c -o t.exe
++          fi
++          ./t.exe
++          ls -la ./*.profraw
++          llvm-profdata merge -o t.profdata ./*.profraw
++          llvm-profdata show t.profdata | head -n 5
++
++      - name: Merge the Ocarina profile
++        if: matrix.flavor != 'pgogen'
++        shell: msys2 {0}
++        run: |
++          set -euo pipefail
++          shopt -s nullglob globstar
++          mkdir -p build/pgo
++          for archive in pgo/*.zip; do
++            unzip -o -q -d build/pgo "$archive"
++          done
++          raws=(pgo/*.profraw build/pgo/**/*.profraw)
++          if [ ${#raws[@]} -eq 0 ]; then
++            echo "No profile under pgo/: eglantine.profdata only"
++            cp eglantine.profdata build/use.profdata
++            exit 0
++          fi
++          echo "Ocarina profile from ${#raws[@]} file(s)"
++          weighted=()
++          for raw in "${raws[@]}"; do
++            weighted+=("--weighted-input=4,$raw")
++          done
++          if ! llvm-profdata merge -o build/use.profdata "${weighted[@]}" eglantine.profdata; then
++            echo "eglantine.profdata did not merge: the Ocarina profile alone"
++            llvm-profdata merge -o build/use.profdata "${raws[@]}"
++          fi
++          llvm-profdata show build/use.profdata | head -n 5
+ 
+       - name: Configure
+         shell: msys2 {0}
+         run: |
+           set -euo pipefail
+-          profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
+-            -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
++          if [ '${{ matrix.flavor }}' = 'pgogen' ]; then
++            profile="-fprofile-generate"
++          else
++            profile="-fprofile-use=$(cygpath -m "$PWD/build/use.profdata") -Wno-backend-plugin \
++              -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
++          fi
+           # CMake's IPO check fails under MSYS2 clang (UseLTO.cmake stops the configure), so
+           # ThinLTO goes in the flags directly, with LLVM's archiver for the bitcode objects.
+           lto=()
+           linker="-fuse-ld=lld"
+-          if [ '${{ matrix.lto }}' = 'true' ]; then
++          if [ '${{ matrix.flavor }}' = 'lto' ]; then
+             profile="$profile -flto=thin"
+             linker="$linker -flto=thin"
+             lto=(-DCMAKE_AR=/ucrt64/bin/llvm-ar.exe -DCMAKE_RANLIB=/ucrt64/bin/llvm-ranlib.exe)
+           fi
++          if [ '${{ matrix.flavor }}' = 'pgogen' ]; then
++            linker="$linker -fprofile-generate"
++          fi
+           cmake -S . -B build/release -G Ninja "${lto[@]}" \
+             -DCMAKE_BUILD_TYPE=Release \
+             -DBUILD_TESTING=OFF \
+@@ -166,7 +232,7 @@ jobs:
+       - name: Upload
+         uses: actions/upload-artifact@v7
+         with:
+-          name: lichii-windows-${{ inputs.preset || 'zen2' }}${{ matrix.lto && '-lto' || '' }}-${{ github.sha }}
++          name: lichii-windows-${{ inputs.preset || 'zen2' }}-${{ matrix.flavor }}-${{ github.sha }}
+           path: build/release/bin/
+           if-no-files-found: error
+           retention-days: 14
+diff --git a/pgo/README.md b/pgo/README.md
+new file mode 100644
+index 000000000..dd7b16cdf
+--- /dev/null
++++ b/pgo/README.md
+@@ -0,0 +1,7 @@
++# Ocarina of Time PGO profile
++
++1. Run the `pgogen` artifact of the lichii-tuned workflow (an instrumented, slower build).
++2. Play Ocarina of Time for 5-10 minutes in the places that matter (Kokiri Forest, the village
++   wide view, combat, menus), then close Lichii normally (File > Exit).
++3. `default_*.profraw` files appear next to lichii.exe. Zip them and upload the zip here (pgo/).
++4. The push rebuilds the `normal` and `lto` flavors with this profile merged in.
+diff --git a/src/common/nx2_placement.cpp b/src/common/nx2_placement.cpp
+index 6d7067f8f..73e2da7b6 100644
+--- a/src/common/nx2_placement.cpp
++++ b/src/common/nx2_placement.cpp
+@@ -34,6 +34,11 @@ struct Plan {
+     Mode mode{Mode::Off};
+     u64 gpu{};
+     u64 rest{};
++    /// With EDEN_NX2_PLACEMENT_CORES (default on): the GPU front and back each get a physical
++    /// core of the GPU domain to themselves, VulkanWorker the domain's other cores.
++    u64 front{};
++    u64 back{};
++    u64 worker{};
+ };
+ 
+ #ifdef _WIN32
+@@ -65,6 +70,33 @@ std::vector<u64> QueryDomains() {
+     return domains;
+ }
+ 
++std::vector<u64> QueryCores() {
++    DWORD length = 0;
++    GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &length);
++    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || length == 0) {
++        return {};
++    }
++    std::vector<u8> buffer(length);
++    auto* const first = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data());
++    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, first, &length)) {
++        return {};
++    }
++    std::vector<u64> cores;
++    for (DWORD offset = 0; offset < length;) {
++        const auto* const info =
++            reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + offset);
++        if (info->Size == 0) {
++            break;
++        }
++        if (info->Relationship == RelationProcessorCore && info->Processor.GroupCount >= 1 &&
++            info->Processor.GroupMask[0].Group == 0 && info->Processor.GroupMask[0].Mask != 0) {
++            cores.push_back(static_cast<u64>(info->Processor.GroupMask[0].Mask));
++        }
++        offset += info->Size;
++    }
++    return cores;
++}
++
+ u64 ProcessMask() {
+     DWORD_PTR process{};
+     DWORD_PTR system{};
+@@ -118,6 +150,22 @@ std::vector<u64> QueryDomains() {
+     return {unique.begin(), unique.end()};
+ }
+ 
++std::vector<u64> QueryCores() {
++    std::set<u64> unique;
++    for (int cpu = 0; cpu < 64; ++cpu) {
++        std::ifstream file{"/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
++                          "/topology/thread_siblings_list"};
++        std::string list;
++        if (!std::getline(file, list)) {
++            continue;
++        }
++        if (const u64 mask = ParseCpuList(list); mask != 0) {
++            unique.insert(mask);
++        }
++    }
++    return {unique.begin(), unique.end()};
++}
++
+ u64 ProcessMask() {
+     cpu_set_t set;
+     CPU_ZERO(&set);
+@@ -147,6 +195,9 @@ bool SetMask(u64 mask) {
+ std::vector<u64> QueryDomains() {
+     return {};
+ }
++std::vector<u64> QueryCores() {
++    return {};
++}
+ u64 ProcessMask() {
+     return 0;
+ }
+@@ -208,8 +259,29 @@ Plan MakePlan() {
+         plan.mode = Mode::Off;
+         return plan;
+     }
+-    LOG_INFO(Common, "Nx2Placement: mode={} gpu={:#x} rest={:#x}",
+-             plan.mode == Mode::Gpu ? "gpu" : "split", plan.gpu, plan.rest);
++    plan.front = plan.back = plan.worker = plan.gpu;
++    const char* const per_core = std::getenv("EDEN_NX2_PLACEMENT_CORES");
++    if (per_core == nullptr || per_core[0] != '0') {
++        std::vector<u64> cores;
++        for (const u64 core : QueryCores()) {
++            if ((core & plan.gpu) == core) {
++                cores.push_back(core);
++            }
++        }
++        if (cores.size() >= 2) {
++            plan.front = cores[0];
++            plan.back = cores[1];
++            u64 others = 0;
++            for (size_t i = 2; i < cores.size(); ++i) {
++                others |= cores[i];
++            }
++            // Two cores only: VulkanWorker shares them (its load is the smallest of the three).
++            plan.worker = others != 0 ? others : plan.gpu;
++        }
++    }
++    LOG_INFO(Common, "Nx2Placement: mode={} gpu={:#x} rest={:#x} front={:#x} back={:#x} worker={:#x}",
++             plan.mode == Mode::Gpu ? "gpu" : "split", plan.gpu, plan.rest, plan.front, plan.back,
++             plan.worker);
+     return plan;
+ }
+ 
+@@ -244,9 +316,13 @@ void Apply(Role role) {
+     u64 mask = 0;
+     switch (role) {
+     case Role::GpuFront:
++        mask = plan.front;
++        break;
+     case Role::GpuBack:
++        mask = plan.back;
++        break;
+     case Role::VulkanWorker:
+-        mask = plan.gpu;
++        mask = plan.worker;
+         break;
+     case Role::GuestCore:
+     case Role::Background:
+diff --git a/src/common/nx2_placement.h b/src/common/nx2_placement.h
+index 267a59802..53e410812 100644
+--- a/src/common/nx2_placement.h
++++ b/src/common/nx2_placement.h
+@@ -14,6 +14,9 @@
+ // EDEN_NX2_PLACEMENT_DOMAIN=<n> picks the L3 domain for the GPU threads (default: the last one,
+ // away from CPU 0 and its interrupts). EDEN_NX2_PLACEMENT_GPU=<hex mask> sets the GPU threads'
+ // logical processors by hand (processor group 0), the rest gets the complement.
++// EDEN_NX2_PLACEMENT_CORES=0 lets the three GPU threads share the domain; by default the front
++// and the back each get a physical core (both SMT siblings) and VulkanWorker the others, so a
++// spinning front never takes execution resources from the back.
+ namespace Common::Nx2Placement {
+ 
+ enum class Role {
+-- 
+2.43.0
+

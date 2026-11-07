@@ -1,0 +1,51 @@
+From 43515fb50228ea506302465cc72994526b58caba Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 01:28:52 +0100
+Subject: [PATCH] Ocarina of Time: 30 FPS by default in this build
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/common/settings.h    | 2 +-
+ src/yuzu/main_window.cpp | 5 +++--
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/common/settings.h b/src/common/settings.h
+index d5f8bf4d3..970a82419 100644
+--- a/src/common/settings.h
++++ b/src/common/settings.h
+@@ -615,7 +615,7 @@ struct Values {
+     // Ocarina of Time: present at 30 fps for lower-end PCs (nx2_gsv.h PaceToVblank). The game's
+     // timing follows real time (Dynamic FPS by Dark), so it keeps full speed. Asked once at the
+     // first launch (oot_fps_asked).
+-    SwitchableSetting<bool> oot_30fps{linkage, false, "oot_30fps", Category::RendererAdvanced};
++    SwitchableSetting<bool> oot_30fps{linkage, true, "oot_30fps", Category::RendererAdvanced};
+     Setting<bool> oot_fps_asked{linkage, false, "oot_fps_asked", Category::RendererAdvanced};
+ 
+     // Mario Kart World: select a fixed or dynamic in-game frame-rate mode (loader/nso.cpp).
+diff --git a/src/yuzu/main_window.cpp b/src/yuzu/main_window.cpp
+index b9f7a972c..8f5f7f6eb 100644
+--- a/src/yuzu/main_window.cpp
++++ b/src/yuzu/main_window.cpp
+@@ -561,7 +561,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
+     }
+ 
+     // The first launch asks for Ocarina of Time's frame rate (not when started with a game,
+-    // e.g. from a shortcut or script: that keeps the 60 FPS default until the next plain launch).
++    // e.g. from a shortcut or script: that keeps the 30 FPS default until the next plain launch).
+     if (!launched_with_game && !Settings::values.oot_fps_asked.GetValue()) {
+         QTimer::singleShot(0, this, &MainWindow::AskOotFrameRate);
+     }
+@@ -578,7 +578,8 @@ void MainWindow::AskOotFrameRate() {
+            "Switch any time with the 60 FPS / 30 FPS button at the bottom of the window."));
+     QPushButton* const fps60 = box.addButton(tr("60 FPS"), QMessageBox::AcceptRole);
+     QPushButton* const fps30 = box.addButton(tr("30 FPS (lower-end PCs)"), QMessageBox::AcceptRole);
+-    box.setDefaultButton(fps60);
++    // 30 FPS first: on a Zen 2 CPU the game runs steadier there than chasing 60.
++    box.setDefaultButton(fps30);
+     box.exec();
+     Settings::values.oot_30fps.SetValue(box.clickedButton() == fps30);
+     Settings::values.oot_fps_asked.SetValue(true);
+-- 
+2.43.0
+

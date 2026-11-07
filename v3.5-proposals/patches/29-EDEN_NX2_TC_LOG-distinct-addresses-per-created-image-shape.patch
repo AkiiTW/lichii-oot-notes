@@ -1,0 +1,68 @@
+From d18e0af21eb9ed8156b4ff6cf7769282ccb19e84 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 16:42:00 +0100
+Subject: [PATCH] EDEN_NX2_TC_LOG: distinct addresses per created image shape
+
+Tells a target recreated at the same address (dropped by aliasing or the collector) from one the
+game moves around its memory every frame.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/video_core/texture_cache/texture_cache.h      | 10 ++++++----
+ src/video_core/texture_cache/texture_cache_base.h |  2 ++
+ 2 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index 5117e7c30..35a1c623a 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -461,12 +461,13 @@ void TextureCache<P>::TickFrame() {
+         std::sort(shapes.rbegin(), shapes.rend());
+         for (size_t i = 0; i < std::min<size_t>(10, shapes.size()); ++i) {
+             const u64 key = shapes[i].second;
+-            LOG_INFO(HW_GPU, "  created {}x: format {} type {} levels {} layers {} {}x{} (last at {:#x})",
+-                     shapes[i].first, key >> 56, (key >> 52) & 0xF, (key >> 48) & 0xF,
+-                     (key >> 36) & 0xFFF, (key >> 18) & 0x3FFFF, key & 0x3FFFF,
+-                     created_shapes[key].second);
++            LOG_INFO(HW_GPU, "  created {}x at {} addresses: format {} type {} levels {} layers {} {}x{} (last at {:#x})",
++                     shapes[i].first, created_shape_addresses[key].size(), key >> 56,
++                     (key >> 52) & 0xF, (key >> 48) & 0xF, (key >> 36) & 0xFFF,
++                     (key >> 18) & 0x3FFFF, key & 0x3FFFF, created_shapes[key].second);
+         }
+         created_shapes.clear();
++        created_shape_addresses.clear();
+         // The per-image and per-shape tallies only feed debug lines: skip them while those are off.
+         // EDEN_NX2_TC_LOG wants the shapes of the images created (logged above at Info).
+         debug_stats = log_tc || Common::Log::IsLevelEnabled(Common::Log::Class::HW_GPU, Common::Log::Level::Debug);
+@@ -2735,6 +2736,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
+             auto& shape = created_shapes[key];
+             ++shape.first;
+             shape.second = gpu_addr;
++            created_shape_addresses[key].insert(gpu_addr);
+         }
+         ++images_created;
+     }
+diff --git a/src/video_core/texture_cache/texture_cache_base.h b/src/video_core/texture_cache/texture_cache_base.h
+index ed1562544..567df63c2 100644
+--- a/src/video_core/texture_cache/texture_cache_base.h
++++ b/src/video_core/texture_cache/texture_cache_base.h
+@@ -16,6 +16,7 @@
+ #include <type_traits>
+ // TODO: find out which don't require stable iters
+ #include <unordered_map>
++#include <unordered_set>
+ #include "common/container/unordered_map.h"
+ #include "common/container/unordered_set.h"
+ #include <vector>
+@@ -145,6 +146,7 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
+     std::vector<u8> astc_scan_buffer;
+     u64 images_deleted{};
+     std::map<u64, std::pair<u32, GPUVAddr>> created_shapes;
++    std::map<u64, std::unordered_set<GPUVAddr>> created_shape_addresses; ///< Distinct addresses per shape
+     bool debug_stats{true}; ///< Collect what only the debug statistics lines use
+     /// EDEN_NX2_TC_LOG: uploads from guest memory by kind (last 600 frames): ASTC, BCn, depth,
+     /// other colour; and how many went into images the GPU had already written (render targets).
+-- 
+2.43.0
+

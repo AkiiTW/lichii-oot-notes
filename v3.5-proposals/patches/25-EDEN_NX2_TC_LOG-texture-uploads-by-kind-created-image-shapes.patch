@@ -1,0 +1,92 @@
+From 4cccf896cc1d92eb79228e022e8214b7e70f4a5c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 15:52:14 +0100
+Subject: [PATCH] EDEN_NX2_TC_LOG: texture uploads by kind, created image
+ shapes at Info
+
+In Ocarina's market the collector evicts ~250 images a second at the critical threshold and
+~400 MB/s come back from guest memory. Count the uploads as ASTC / BCn / depth / other colour and
+how many go into images the GPU already wrote, and log the shapes of the images created, to see
+what churns.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/video_core/texture_cache/texture_cache.h  | 24 +++++++++++++++++--
+ .../texture_cache/texture_cache_base.h        |  5 ++++
+ 2 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index 021416105..654375243 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -432,6 +432,15 @@ void TextureCache<P>::TickFrame() {
+                  async_decodes_queued, astc_opaque_images, astc_alpha_images);
+         LOG_INFO(HW_GPU, "Texture cache last 600 frames: {} uploads from guest memory, {} MiB (largest {} MiB, {} by layer)",
+                  images_uploaded, uploaded_bytes >> 20, largest_upload >> 20, layer_uploads);
++        LOG_INFO(HW_GPU, "Texture cache last 600 frames: uploads by kind: ASTC {} ({} MiB), BCn {} "
++                         "({} MiB), depth {} ({} MiB), other colour {} ({} MiB); {} into GPU-written "
++                         "images",
++                 uploads_by_kind[0], upload_bytes_by_kind[0] >> 20, uploads_by_kind[1],
++                 upload_bytes_by_kind[1] >> 20, uploads_by_kind[2], upload_bytes_by_kind[2] >> 20,
++                 uploads_by_kind[3], upload_bytes_by_kind[3] >> 20, uploads_gpu_written);
++        uploads_by_kind = {};
++        upload_bytes_by_kind = {};
++        uploads_gpu_written = 0;
+         images_uploaded = uploaded_bytes = largest_upload = layer_uploads = 0;
+         astc_opaque_images = astc_alpha_images = 0;
+         std::vector<std::pair<u32, u64>> shapes;
+@@ -439,14 +448,15 @@ void TextureCache<P>::TickFrame() {
+         std::sort(shapes.rbegin(), shapes.rend());
+         for (size_t i = 0; i < std::min<size_t>(10, shapes.size()); ++i) {
+             const u64 key = shapes[i].second;
+-            LOG_DEBUG(HW_GPU, "  created {}x: format {} type {} levels {} layers {} {}x{} (last at {:#x})",
++            LOG_INFO(HW_GPU, "  created {}x: format {} type {} levels {} layers {} {}x{} (last at {:#x})",
+                      shapes[i].first, key >> 56, (key >> 52) & 0xF, (key >> 48) & 0xF,
+                      (key >> 36) & 0xFFF, (key >> 18) & 0x3FFFF, key & 0x3FFFF,
+                      created_shapes[key].second);
+         }
+         created_shapes.clear();
+         // The per-image and per-shape tallies only feed debug lines: skip them while those are off.
+-        debug_stats = Common::Log::IsLevelEnabled(Common::Log::Class::HW_GPU, Common::Log::Level::Debug);
++        // EDEN_NX2_TC_LOG wants the shapes of the images created (logged above at Info).
++        debug_stats = log_tc || Common::Log::IsLevelEnabled(Common::Log::Class::HW_GPU, Common::Log::Level::Debug);
+         gc_deletes = gc_costly_deletes = gc_download_deletes = async_decodes_queued = 0;
+         images_created = images_deleted = 0;
+     }
+@@ -1778,6 +1788,16 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
+     ++images_uploaded;
+     uploaded_bytes += image.guest_size_bytes;
+     largest_upload = (std::max<u64>)(largest_upload, image.guest_size_bytes);
++    {
++        const PixelFormat format = image.info.format;
++        const size_t kind = IsPixelFormatASTC(format) ? 0
++                            : IsPixelFormatBCn(format) ? 1
++                            : GetFormatType(format) != SurfaceType::ColorTexture ? 2
++                                                                                 : 3;
++        ++uploads_by_kind[kind];
++        upload_bytes_by_kind[kind] += image.guest_size_bytes;
++        uploads_gpu_written += True(image.flags & ImageFlagBits::GpuModified) ? 1 : 0;
++    }
+     if (!UploadInChunks(image)) {
+         auto staging = runtime.UploadStagingBuffer(MapSizeBytes(image));
+         UploadImageContents(image, staging);
+diff --git a/src/video_core/texture_cache/texture_cache_base.h b/src/video_core/texture_cache/texture_cache_base.h
+index 87d0d7971..0317e8237 100644
+--- a/src/video_core/texture_cache/texture_cache_base.h
++++ b/src/video_core/texture_cache/texture_cache_base.h
+@@ -146,6 +146,11 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
+     u64 images_deleted{};
+     std::map<u64, std::pair<u32, GPUVAddr>> created_shapes;
+     bool debug_stats{true}; ///< Collect what only the debug statistics lines use
++    /// EDEN_NX2_TC_LOG: uploads from guest memory by kind (last 600 frames): ASTC, BCn, depth,
++    /// other colour; and how many went into images the GPU had already written (render targets).
++    std::array<u64, 4> uploads_by_kind{};
++    std::array<u64, 4> upload_bytes_by_kind{};
++    u64 uploads_gpu_written{};
+ 
+     static constexpr s64 DEFAULT_EXPECTED_MEMORY = 1_GiB + 125_MiB;
+     static constexpr s64 DEFAULT_CRITICAL_MEMORY = 1_GiB + 625_MiB;
+-- 
+2.43.0
+

@@ -1,0 +1,27 @@
+From c031f3e3a2a394a82d00b40c1c40f262eb533bfd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 15:33:36 +0100
+Subject: [PATCH] dist: fix the texture cache comment
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ dist/nx2_switches.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dist/nx2_switches.txt b/dist/nx2_switches.txt
+index 7309ef062..32940b71e 100644
+--- a/dist/nx2_switches.txt
++++ b/dist/nx2_switches.txt
+@@ -37,7 +37,7 @@ EDEN_NX2_PLACEMENT=split
+ # comes back (the stutter of a first visit, again). 0 = never destroy.
+ EDEN_NX2_PIPELINE_EVICT_FRAMES=0
+ 
+-# Keep textures unused for ~75 s (they were decoded again on coming back). Leave the
++# Keep textures unused for ~75 s (they were decoded again on coming back).
+ # The texture cache collects from 5 GiB on (MaxCriticalMemory caps the driver budget it follows),
+ # so on a 16 GB card Ocarina evicts the textures of the part of the village behind the camera and
+ # decodes their ASTC again when the camera turns. Fixed thresholds win over that cap; keep them
+-- 
+2.43.0
+

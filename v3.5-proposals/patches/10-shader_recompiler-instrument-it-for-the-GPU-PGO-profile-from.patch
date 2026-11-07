@@ -1,0 +1,43 @@
+From 2b5448ee83f210e9089f8191173f2664d13db994 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 13:55:13 +0100
+Subject: [PATCH] shader_recompiler: instrument it for the GPU PGO profile from
+ its own CMakeLists.txt
+
+video_core's CMakeLists.txt runs before shader_recompiler's, so the target did not exist
+there and the pgogen configure stopped.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/shader_recompiler/CMakeLists.txt | 5 +++++
+ src/video_core/CMakeLists.txt        | 2 +-
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/shader_recompiler/CMakeLists.txt b/src/shader_recompiler/CMakeLists.txt
+index b47f1288a..a4d2a0712 100644
+--- a/src/shader_recompiler/CMakeLists.txt
++++ b/src/shader_recompiler/CMakeLists.txt
+@@ -273,3 +273,8 @@ else()
+ endif()
+ 
+ create_target_directory_groups(shader_recompiler)
++
++# lichii-tuned's pgogen flavor: see LICHII_PGO_GENERATE_GPU in src/video_core/CMakeLists.txt.
++if (LICHII_PGO_GENERATE_GPU)
++    target_compile_options(shader_recompiler PRIVATE -fprofile-generate)
++endif()
+diff --git a/src/video_core/CMakeLists.txt b/src/video_core/CMakeLists.txt
+index 3f79896e6..aa98e4bf2 100644
+--- a/src/video_core/CMakeLists.txt
++++ b/src/video_core/CMakeLists.txt
+@@ -562,5 +562,5 @@ create_target_directory_groups(video_core)
+ option(LICHII_PGO_GENERATE_GPU "Instrument video_core and shader_recompiler for PGO" OFF)
+ if (LICHII_PGO_GENERATE_GPU)
+     target_compile_options(video_core PRIVATE -fprofile-generate)
+-    target_compile_options(shader_recompiler PRIVATE -fprofile-generate)
++    # shader_recompiler is instrumented in its own CMakeLists.txt (added after this one).
+ endif()
+-- 
+2.43.0
+

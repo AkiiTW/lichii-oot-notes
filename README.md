@@ -18,6 +18,7 @@ voulez.
 | [`FINDINGS.md`](FINDINGS.md) | Dated findings, newest first, each with numbers, build and status |
 | [`MEASURING.md`](MEASURING.md) | How the numbers are taken: switches, test window, log lines, scripts |
 | [`tools/`](tools) | Small scripts that read Lichii logs |
+| [`v3.5-proposals/`](v3.5-proposals) | **For Frizti:** everything AkiiTW's branch proposes for V3.5 — proposals, measurements, patches, compatibility notes, a Status column to fill |
 
 Nothing from the game itself goes here: no game files, dumps, textures or shaders. Only measurements,
 conclusions and code references.

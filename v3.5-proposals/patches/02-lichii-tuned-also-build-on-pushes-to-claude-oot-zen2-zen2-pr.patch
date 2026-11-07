@@ -1,0 +1,78 @@
+From ab849a779f07cc3f7edd49a2c24c619a69248f35 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 00:41:36 +0100
+Subject: [PATCH] lichii-tuned: also build on pushes to claude/oot-zen2 (zen2
+ preset)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ .github/workflows/lichii-tuned.yml | 22 +++++++++++++++-------
+ 1 file changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/.github/workflows/lichii-tuned.yml b/.github/workflows/lichii-tuned.yml
+index 5b8f5f27b..5d126ac7e 100644
+--- a/.github/workflows/lichii-tuned.yml
++++ b/.github/workflows/lichii-tuned.yml
+@@ -11,13 +11,21 @@ on:
+         type: choice
+         options: [zen2, zen4, v3, generic]
+         default: zen2
++  push:
++    branches:
++      - claude/oot-zen2
++    paths:
++      - "src/**"
++      - "CMakeLists.txt"
++      - "dist/**"
++      - ".github/workflows/lichii-tuned.yml"
+ 
+ permissions:
+   contents: read
+ 
+ jobs:
+   build:
+-    name: windows ${{ inputs.preset }}${{ matrix.lto && ' + LTO' || '' }}
++    name: windows ${{ inputs.preset || 'zen2' }}${{ matrix.lto && ' + LTO' || '' }}
+     runs-on: windows-2022
+     timeout-minutes: 350
+     strategy:
+@@ -66,9 +74,9 @@ jobs:
+         uses: actions/cache/restore@v5
+         with:
+           path: .ccache
+-          key: objects-tuned-${{ inputs.preset }}-${{ matrix.lto }}-${{ github.sha }}-${{ github.run_id }}
++          key: objects-tuned-${{ inputs.preset || 'zen2' }}-${{ matrix.lto }}-${{ github.sha }}-${{ github.run_id }}
+           restore-keys: |
+-            objects-tuned-${{ inputs.preset }}-${{ matrix.lto }}-
++            objects-tuned-${{ inputs.preset || 'zen2' }}-${{ matrix.lto }}-
+ 
+       - name: Configure
+         shell: msys2 {0}
+@@ -89,11 +97,11 @@ jobs:
+             -DVulkanHeaders_FORCE_BUNDLED=ON \
+             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
+             -DENABLE_UPDATE_CHECKER=OFF \
+-            -DLICHII_BUILD_TAG=tuned-${{ inputs.preset }}-${{ github.run_number }} \
+-            -DLICHII_BUILD_PLATFORM=windows-x86_64-${{ inputs.preset }} \
++            -DLICHII_BUILD_TAG=tuned-${{ inputs.preset || 'zen2' }}-${{ github.run_number }} \
++            -DLICHII_BUILD_PLATFORM=windows-x86_64-${{ inputs.preset || 'zen2' }} \
+             -DUSE_DISCORD_PRESENCE=OFF \
+             -DUSE_CCACHE=ON \
+-            -DYUZU_BUILD_PRESET=${{ inputs.preset }} \
++            -DYUZU_BUILD_PRESET=${{ inputs.preset || 'zen2' }} \
+             -DENABLE_LTO=${{ matrix.lto && 'ON' || 'OFF' }} \
+             -DCMAKE_C_COMPILER=clang \
+             -DCMAKE_CXX_COMPILER=clang++ \
+@@ -150,7 +158,7 @@ jobs:
+       - name: Upload
+         uses: actions/upload-artifact@v7
+         with:
+-          name: lichii-windows-${{ inputs.preset }}${{ matrix.lto && '-lto' || '' }}-${{ github.sha }}
++          name: lichii-windows-${{ inputs.preset || 'zen2' }}${{ matrix.lto && '-lto' || '' }}-${{ github.sha }}
+           path: build/release/bin/
+           if-no-files-found: error
+           retention-days: 14
+-- 
+2.43.0
+
