@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — PGO profile re-recorded on current code (market + field + Kokiri): no measurable gain — confirmed neutral
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@c733486aa (profile `pgo/ocarina-market-field-kokiri-ca4f7d0.profraw`, weighted 4 over `eglantine.profdata`; replaces the Kokiri-only profile of cd1f029)
+- **Where measured:** market, fountain laps in the 150-270 s window; switches as in the RT_EVICT entry
+- **Measured:** first 600-frame block of the window had 29 frames > 100 ms (worst 839 ms; arrival/loading overlap), the rest 7 over 100 ms in 4 blocks, like the two runs of the same code with the old profile (10 each). Mean frame over the last four blocks 40.9 ms vs 41.9 and 40.4 ms (old profile, same code). Back work per draw 13.8 µs vs 14.1 / 14.3 µs; zone `other` 145 vs 156-162 ms/s, the rest within noise.
+- **Conclusion:** neutral within this protocol's noise (±2-3 ms per frame; at most ~3 % less back work per draw). Kept, since it matches the current code. A single-run A/B cannot resolve gains under ~5 %; use several runs per side (as Frizti does) for small changes.
+- **Code / switch:** `pgo/`, `.github/workflows/lichii-tuned.yml`
+
 ### 2026-11-07 — Navi hovering over NPCs and animals does not drop the frame rate — ruled out
 - **Who:** AkiiTW · **Setup:** A · **Build:** AkiiTW/Lichii@ca4f7d060
 - **Where measured:** next to an NPC/animal, fixed camera, Navi alternately on the NPC and back with Link, every 30 s
