@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — The back's "clear" time is the texture cache making render targets: ~170 ms/s of upkeep — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@d9bf5d902 (new `GPU_PROFILE` zones: clear targets, image join, image create, view create, framebuffer create, tc tick)
+- **Where measured:** market, fountain laps in the 150-270 s window; switches as in the RT_EVICT entry (no RT_REUSE)
+- **Measured (per second, back thread):** `clear` itself 3.1 ms (1,650/s, 1.9 µs each) — the rest of the old ~70 ms was nested work: **image create 52 ms (385/s, 136 µs each: VkImage + memory)**, image join 13 ms (34 µs each), **view create 19 ms (591/s, 32 µs each)**, framebuffer create 0.4 ms (283/s, cheap), clear targets 10 ms; **tc tick 80 ms (3.1 ms per frame: collector, early drops, freeing sentenced images)**; `other` fell from ~155 to 78 ms (tc tick used to land there). Mean frame 38.7 ms, 53.9 k draws/s (a good run).
+- **Conclusion:** texture cache upkeep is ~165-170 ms/s, ~20 % of the back, nearly all from Ocarina's transient render targets (new address each frame). Image creation is not cheap after all (136 µs each), so the earlier `RT_REUSE` result was hidden in the run-to-run noise. Next (a099ef505): pool keeps the most recently freed images (512 MiB, 32 per shape, oldest destroyed first) and tc tick split into image free / tc collect.
+- **Code / switch:** `nx2_profile.h` zones; `TextureCache::JoinImages`, `FindOrEmplaceImageView`, `GetFramebufferId`, `TickFrame`
+
 ### 2026-11-07 — PGO profile re-recorded on current code (market + field + Kokiri): no measurable gain — confirmed neutral
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@c733486aa (profile `pgo/ocarina-market-field-kokiri-ca4f7d0.profraw`, weighted 4 over `eglantine.profdata`; replaces the Kokiri-only profile of cd1f029)
 - **Where measured:** market, fountain laps in the 150-270 s window; switches as in the RT_EVICT entry
@@ -26,7 +33,7 @@ were taken after ~20 min of play — compare like with like.
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@ca4f7d060 (04595848c had the switch silently doing nothing: `MarkPoolable` was private, so the `requires` test skipped it)
 - **Where measured:** market, fountain laps in the 150-270 s window; same switches as the RT_EVICT entry below plus `EDEN_NX2_TC_RT_REUSE=1`
 - **Measured:** 2,750-3,700 host images reused per 600 frames out of ~8,000 new targets (~35 %); the pool sat full at its 1 GiB cap (8 per shape), so most shapes missed. Back zones unchanged within noise (`other` 159 → 156, `clear` 72 → 63, `update buffers` 60 → 64 ms/s). Mean frame 42.5 ms vs 38.5 (test 9) and **40.8 ms in a rerun of test 9's code** (the build where the pool did nothing) → **run-to-run noise here is ~±2-3 ms per frame**; frames > 100 ms 10 in both of the two later runs. Device memory median 9.1 → 10.2 GB (the pool's 1 GiB is outside the cache's count, closer to its 11,264 MiB critical threshold).
-- **Conclusion:** ruled out. Creating a VkImage on this driver is cheap next to the rest of the draw work; the pool only costs VRAM. Left in the code, off.
+- **Conclusion:** ruled out at the time — **revisited:** the clear breakdown above shows each image creation costs ~136 µs, so the gain was likely lost in the noise; the pool is being retried with oldest-first eviction.
 - **Code / switch:** `EDEN_NX2_TC_RT_REUSE=1` (off)
 
 ### 2026-11-07 — `EDEN_NX2_TC_RT_EVICT=4` + `RT_NO_UPLOAD=3`: texture uploads gone from the back — confirmed
