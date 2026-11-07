@@ -33,6 +33,7 @@ Frizti's Claude can replace this log with its own entries in `FINDINGS.md`.
 
 | Time (2026-11-07) | Status |
 | --- | --- |
+| 16:42 | 45 FPS on his route (goal 60). **The big one: the 2 GPU threads take turns instead of overlapping; up to +25-28 % if they overlap.** Next: find what each of the game's ~2,300 waits/s waits for. — *Matches Setup A: the front waits 520-650 ms/s while the back idles 90-130 ms/s (`split wait`), i.e. drains serialize them; AkiiTW's estimate was up to ~+15 % on a Zen 2 where the back is busier.* |
 | 15:58 | New Castle Town route recorded, **44.6 FPS baseline**. Testing: 2D blits noted by their destination (A/B, 8 rounds). Next: how busy the back GPU thread is. Saves restored after every test. — *AkiiTW's data on the back in the market: `FINDINGS.md`, entries "The back is the limit…" and "Where bind stage buffers goes".* |
 | 15:18 | Work queue (LOOP_STATUS.md): EXP10 bounded dispatch/upload writes (−6 % front waiting); next semaphore/query releases, 14-18 ms fence-release drains, ~410 noted-write reads/s; fixed-route steering, `replay_route.py`, 1 % / 0.1 % lows, PGO retrain; zortos ports; item 13 = per-bind bank check ~10 % of the back. |
 | 14:53 | 34 FPS. ~1,000 GPU-thread waits/s were a check giving up after 512 noted writes; testing a per-page write index + tracked inline uploads. |
