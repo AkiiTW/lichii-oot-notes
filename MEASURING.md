@@ -37,3 +37,20 @@ front. The front's line has `split drain` (front waiting for the back) and its c
   log's test window (needs the `Nx2TestWindow` lines).
 - `tools/profile_windows.py <log>` — one line per 10 s window: draws/s, back and front busy, drains,
   thread CPU, render passes.
+
+## Comparing across setups
+
+Absolute numbers (FPS, ms per second, µs per draw) follow the CPU: the back is one thread, so its speed
+is single-core speed (clock, IPC, cache size, memory latency). A Zen 4 / Zen 5 or an X3D part does the
+same work in far less time than a Zen 2. What carries over between machines:
+
+- **Per-frame counts**, set by the game: draws per frame (~2,100 in the market), render passes per
+  frame, MME DMA reads and fence releases per frame, banks per frame, images created per frame.
+- **Shares**: each zone's share of the back's busy time, and whether the back is saturated
+  (busy ≥ ~85 % with the front draining it).
+- **Ratios of an A/B on the same machine**: "storage binds −73 %" transfers; "−47 ms/s" does not.
+
+Memory-bound costs (texture uploads, bank copies, cache misses in lookups) gain more from a large L3 and
+fast RAM than compute-bound ones, so shares shift a little between machines. VRAM size and the
+texture-cache thresholds decide whether the cache thrashes at all. Always name the setup
+(`SETUPS.md`).
