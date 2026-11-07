@@ -9,11 +9,18 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — `EDEN_NX2_TC_RT_REUSE`: reusing dropped render targets' host images gains nothing — ruled out
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@ca4f7d060 (04595848c had the switch silently doing nothing: `MarkPoolable` was private, so the `requires` test skipped it)
+- **Where measured:** market, fountain laps in the 150-270 s window; same switches as the RT_EVICT entry below plus `EDEN_NX2_TC_RT_REUSE=1`
+- **Measured:** 2,750-3,700 host images reused per 600 frames out of ~8,000 new targets (~35 %); the pool sat full at its 1 GiB cap (8 per shape), so most shapes missed. Back zones unchanged within noise (`other` 159 → 156, `clear` 72 → 63, `update buffers` 60 → 64 ms/s). Mean frame 42.5 ms vs 38.5 (test 9) and **40.8 ms in a rerun of test 9's code** (the build where the pool did nothing) → **run-to-run noise here is ~±2-3 ms per frame**; frames > 100 ms 10 in both of the two later runs. Device memory median 9.1 → 10.2 GB (the pool's 1 GiB is outside the cache's count, closer to its 11,264 MiB critical threshold).
+- **Conclusion:** ruled out. Creating a VkImage on this driver is cheap next to the rest of the draw work; the pool only costs VRAM. Left in the code, off.
+- **Code / switch:** `EDEN_NX2_TC_RT_REUSE=1` (off)
+
 ### 2026-11-07 — `EDEN_NX2_TC_RT_EVICT=4` + `RT_NO_UPLOAD=3`: texture uploads gone from the back — confirmed
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@361d13546
 - **Where measured:** market, fountain laps from the start of the 150-270 s window
 - **Measured:** `texture upload` **66 → 1.3 ms/s** (131 before the texture work); uploads from guest memory 9.6 GB → **53-176 MB per 600 frames**, depth uploads 0; 6,700-7,600 stale render targets dropped early per 600 frames; collector 13-304 deletes, **0 costly, 0-2 downloads**; device memory 7.5-9.1 GB, under the expected threshold (was pinned at critical). Mean frame **40.4 → 38.5 ms**, draws/s 49.4 k → 54.0 k, frames > 100 ms **1** (worst 115 ms). From the start of the day (@d4738fce0): 48.6 → 38.5 ms (+26 % FPS), > 100 ms frames 42 → 1. Player: "much better, 21 FPS minimum, very few drops". No visual defect seen.
-- **Conclusion:** kept. The cache now holds real textures; the remaining texture-cache cost is creating ~8,000 images per 600 frames (host image reuse by shape would remove most of it).
+- **Conclusion:** kept. The cache now holds real textures; the remaining texture-cache cost is creating ~8,000 images per 600 frames (host image reuse was tried next: no gain, see above).
 - **Code / switch:** `EDEN_NX2_TC_RT_EVICT=4`, `EDEN_NX2_TC_RT_NO_UPLOAD=3`
 
 ### 2026-11-07 — Ocarina moves its render targets to a new address almost every frame — confirmed

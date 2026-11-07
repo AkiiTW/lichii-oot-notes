@@ -49,7 +49,7 @@ over (`../MEASURING.md`, "Comparing across setups").
 | P09 | Diagnostics: `EDEN_NX2_THREAD_USAGE`, finer `GPU_PROFILE` zones (`ubo fast/classic/bank`, `storage binds`, `texbuf binds`), `EDEN_NX2_TC_LOG` uploads by kind / render-target skips / why depth images upload / distinct addresses per shape | Tooling | Found P01-P03 | None (off unless set) | off | eba617204, 715bf05ae, 984269912, 4cccf896c, 88730eb2a, d18e0af21 | |
 | P10 | On-screen test window (`EDEN_NX2_TEST_START/SECONDS/LABEL/PREPARE`): countdown panel top right, start/end lines in the log | Tooling | Comparable runs without a scripted route | None (off unless set) | off | d8e4fe222 | |
 | P11 | Windows MSYS2 clang workflow `lichii-tuned.yml` (`-march` preset, PGO from `eglantine.profdata` + recorded profiles, flavors normal / pgogen / symbols with `lichii.pdb`) | Build | Zen 2 + PGO build: village 31 / wide 28 / half-turns 24 FPS vs your v2 24 / 18-19 / 13 (build-88 era) | None for MSVC users | optional | f587285b1, ab849a779, 0e688990e, cfc32ad55, 669f3f5f0, 2b5448ee8, 715bf05ae (workflow part), ba6836890 | |
-| — | **Not proposed:** 30 FPS by default (43515fb50, AkiiTW's taste); larger TC thresholds 12288/13824 (ruled out: VRAM full, 1.3 s spikes); dist comment fix c031f3e3a is cosmetic | — | — | — | — | — | — |
+| — | **Not proposed:** 30 FPS by default (43515fb50, AkiiTW's taste); larger TC thresholds 12288/13824 (ruled out: VRAM full, 1.3 s spikes); dist comment fix c031f3e3a is cosmetic; `EDEN_NX2_TC_RT_REUSE` host image pool (04595848c, ca4f7d060: ruled out, no gain and +1 GiB VRAM — see `../FINDINGS.md`) | — | — | — | — | — | — |
 
 Details for each: [`PROPOSALS.md`](PROPOSALS.md). Overlaps with your tree and work:
 [`COMPATIBILITY.md`](COMPATIBILITY.md).
