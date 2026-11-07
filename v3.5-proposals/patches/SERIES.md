@@ -1,6 +1,6 @@
 # Patch series
 
-Against `frizti-v3` (`00ef0ea6c`), in order. `git am patches/*.patch` applies all 29 cleanly (checked); the result matches AkiiTW/Lichii@d18e0af21 for `src/` and `.github/`. On a newer tree use `git am -3` or cherry-pick the commit.
+Against `frizti-v3` (`00ef0ea6c`), in order. `git am patches/*.patch` applies all 30 cleanly; the first 29 were checked to match AkiiTW/Lichii@d18e0af21 for `src/` and `.github/`. On a newer tree use `git am -3` or cherry-pick the commit.
 
 | Patch | Commit | Proposal |
 | --- | --- | --- |
@@ -33,3 +33,4 @@ Against `frizti-v3` (`00ef0ea6c`), in order. `git am patches/*.patch` applies al
 | [`27-EDEN_NX2_TC_RT_NO_UPLOAD-2-also-skip-the-upload-of-new-depth.patch`](27-EDEN_NX2_TC_RT_NO_UPLOAD-2-also-skip-the-upload-of-new-depth.patch) | [`f9def68d9`](https://github.com/AkiiTW/Lichii/commit/f9def68d9) | P01 (=2) |
 | [`28-EDEN_NX2_TC_LOG-why-depth-images-still-get-uploaded.patch`](28-EDEN_NX2_TC_LOG-why-depth-images-still-get-uploaded.patch) | [`88730eb2a`](https://github.com/AkiiTW/Lichii/commit/88730eb2a) | P09 |
 | [`29-EDEN_NX2_TC_LOG-distinct-addresses-per-created-image-shape.patch`](29-EDEN_NX2_TC_LOG-distinct-addresses-per-created-image-shape.patch) | [`d18e0af21`](https://github.com/AkiiTW/Lichii/commit/d18e0af21) | P09 |
+| [`30-Texture-cache-drop-stale-render-targets-early-EDEN_NX2_TC_RT.patch`](30-Texture-cache-drop-stale-render-targets-early-EDEN_NX2_TC_RT.patch) | [`361d13546`](https://github.com/AkiiTW/Lichii/commit/361d13546) | P01 (`RT_EVICT`, `RT_NO_UPLOAD=3`) |

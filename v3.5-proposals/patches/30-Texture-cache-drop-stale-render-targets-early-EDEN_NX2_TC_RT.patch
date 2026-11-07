@@ -1,0 +1,134 @@
+From 361d135460a7d1063f5bc9486aefe0e0e2b6c79c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 17:02:19 +0100
+Subject: [PATCH] Texture cache: drop stale render targets early
+ (EDEN_NX2_TC_RT_EVICT); RT_NO_UPLOAD=3
+
+Ocarina's market moves its render targets to a new address almost every frame (974 created at
+873 addresses per 600 frames), so the cache filled up with targets never used again: device
+memory pinned at the critical threshold, the collector aggressive against real textures (~1,100
+ASTC/BC re-uploads per 600 frames) and ~50 downloads with a full GPU wait. EDEN_NX2_TC_RT_EVICT=
+<frames> drops render targets unused for that many frames first, without downloading them.
+
+With RT_NO_UPLOAD=2 every remaining depth upload was of a new depth image that older images are
+copied into (~750 per 600 frames, ~3.8 GB); =3 skips the upload there too, the copies still run.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/video_core/texture_cache/image_base.h     |  2 +
+ src/video_core/texture_cache/texture_cache.h  | 43 ++++++++++++++++++-
+ .../texture_cache/texture_cache_base.h        |  1 +
+ 3 files changed, 44 insertions(+), 2 deletions(-)
+
+diff --git a/src/video_core/texture_cache/image_base.h b/src/video_core/texture_cache/image_base.h
+index 878c22995..3646dee9f 100644
+--- a/src/video_core/texture_cache/image_base.h
++++ b/src/video_core/texture_cache/image_base.h
+@@ -128,6 +128,8 @@ struct ImageBase {
+ 
+     u64 modification_tick = 0;
+     size_t lru_index = SIZE_MAX;
++    /// Made while looking up a render target (EDEN_NX2_TC_RT_EVICT drops these early, undownloaded).
++    bool transient_target = false;
+ 
+     std::array<u32, MAX_MIP_LEVELS> mip_level_offsets{};
+ 
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index 35a1c623a..8de486f82 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -132,6 +132,36 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
+ 
+ template <class P>
+ void TextureCache<P>::RunGarbageCollector() {
++    // EDEN_NX2_TC_RT_EVICT=<frames>: render targets not used for that many frames are dropped
++    // first, without downloading them. Ocarina moves its targets to a new address almost every
++    // frame (974 created at 873 addresses per 600 frames), so the old ones are never used again:
++    // they filled the cache up to its critical threshold, pushed the collector into its aggressive
++    // mode against real textures, and were sometimes downloaded with a full GPU wait.
++    static const u64 rt_evict_frames = [] {
++        const char* value = std::getenv("EDEN_NX2_TC_RT_EVICT");
++        const u64 frames = value != nullptr ? std::strtoull(value, nullptr, 10) : 0;
++        LOG_INFO(HW_GPU, "EDEN_NX2_TC_RT_EVICT: {}", frames);
++        return frames;
++    }();
++    if (rt_evict_frames != 0 && frame_tick > rt_evict_frames) {
++        boost::container::small_vector<ImageId, 64> stale;
++        lru_cache.ForEachItemBelow(frame_tick - rt_evict_frames, [&](ImageId image_id) {
++            const Image& image = slot_images[image_id];
++            if (image.transient_target && False(image.flags & ImageFlagBits::IsDecoding)) {
++                stale.push_back(image_id);
++            }
++            return stale.size() >= 64;
++        });
++        for (const ImageId image_id : stale) {
++            Image& image = slot_images[image_id];
++            if (True(image.flags & ImageFlagBits::Tracked)) {
++                UntrackImage(image, image_id);
++            }
++            UnregisterImage(image_id);
++            DeleteImage(image_id, image.scale_tick > frame_tick + 5);
++            ++transient_target_deletes;
++        }
++    }
+     bool high_priority_mode = false;
+     bool aggressive_mode = false;
+     bool evict_old_costly = false;
+@@ -442,6 +472,10 @@ void TextureCache<P>::TickFrame() {
+                          "(EDEN_NX2_TC_RT_NO_UPLOAD)",
+                  render_target_uploads_skipped);
+         render_target_uploads_skipped = 0;
++        LOG_INFO(HW_GPU, "Texture cache last 600 frames: {} stale render targets dropped early "
++                         "(EDEN_NX2_TC_RT_EVICT)",
++                 transient_target_deletes);
++        transient_target_deletes = 0;
+         LOG_INFO(HW_GPU, "Texture cache last 600 frames: depth images marked CPU-modified by a "
+                          "guest memory write {} (writes <=4K {}, <=64K {}, <=1M {}, larger {}; whole "
+                          "image {}), by an unmap {}; made with an older image to copy from {}, sparse {}",
+@@ -2725,6 +2759,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
+     Image& new_image = slot_images[new_image_id];
+ 
+     new_image.allocation_tick = frame_tick;
++    new_image.transient_target = finding_render_target;
+     {
+         // Which shapes are being created (periodic log): format, type, levels, layers, size.
+         const u64 key = (u64{static_cast<u32>(new_info.format)} << 56) |
+@@ -2821,7 +2856,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
+     // writes a D32 buffer, and those uploads were still ~3-5 GB per 600 frames with =1.
+     static const int rt_no_upload = [] {
+         const char* value = std::getenv("EDEN_NX2_TC_RT_NO_UPLOAD");
+-        const int level = value != nullptr && (value[0] == '1' || value[0] == '2') ? value[0] - '0' : 0;
++        const int level = value != nullptr && value[0] >= '1' && value[0] <= '3' ? value[0] - '0' : 0;
+         LOG_INFO(HW_GPU, "EDEN_NX2_TC_RT_NO_UPLOAD: {}", level);
+         return level;
+     }();
+@@ -2835,8 +2870,12 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
+             ++depth_cpu_marks[3];
+         }
+     }
++    // =3 also skips it for new depth/stencil images that older images are copied into: the copies
++    // still run (after this), only the parts no older image covers start undefined. With =2 all
++    // remaining depth uploads in the market were of this kind (~750 per 600 frames, ~3.8 GB).
+     if (rt_no_upload != 0 && (finding_render_target || (rt_no_upload >= 2 && depth_format)) &&
+-        join_copies_to_do.empty() && False(new_image.flags & ImageFlagBits::Sparse)) {
++        (join_copies_to_do.empty() || (rt_no_upload >= 3 && depth_format)) &&
++        False(new_image.flags & ImageFlagBits::Sparse)) {
+         new_image.flags &= ~ImageFlagBits::CpuModified;
+         if (False(new_image.flags & ImageFlagBits::Tracked)) {
+             TrackImage(new_image, new_image_id);
+diff --git a/src/video_core/texture_cache/texture_cache_base.h b/src/video_core/texture_cache/texture_cache_base.h
+index 567df63c2..9b042df5c 100644
+--- a/src/video_core/texture_cache/texture_cache_base.h
++++ b/src/video_core/texture_cache/texture_cache_base.h
+@@ -154,6 +154,7 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
+     std::array<u64, 4> upload_bytes_by_kind{};
+     u64 uploads_gpu_written{};
+     u64 render_target_uploads_skipped{}; ///< EDEN_NX2_TC_RT_NO_UPLOAD (last 600 frames)
++    u64 transient_target_deletes{};      ///< EDEN_NX2_TC_RT_EVICT (last 600 frames)
+     /// EDEN_NX2_TC_LOG: why depth/stencil images got marked CPU-modified (last 600 frames):
+     /// a guest memory write, an unmap, created with an older image to copy from, created sparse.
+     std::array<u64, 4> depth_cpu_marks{};
+-- 
+2.43.0
+

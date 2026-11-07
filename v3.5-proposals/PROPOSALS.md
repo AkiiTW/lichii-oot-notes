@@ -62,6 +62,13 @@ a new depth image with older images copied in. Under test (@361d13546): `EDEN_NX
 (skip those too; the copies still run) and `EDEN_NX2_TC_RT_EVICT=<frames>` (drop render targets unused
 for that many frames first, without the download that waits on `runtime.Finish()`).
 
+**Result (17:18, @361d13546, `RT_NO_UPLOAD=3`, `RT_EVICT=4`):** `texture upload` 66 → 1.3 ms/s, uploads
+9.6 GB → 53-176 MB per 600 frames (0 depth), collector 13-304 deletes with 0 costly and 0-2 downloads,
+device memory 7.5-9.1 GB (under expected), mean frame 38.5 ms, frames > 100 ms: 1. `RT_EVICT` code: at the
+start of `RunGarbageCollector`, up to 64 images with `transient_target` (set in `JoinImages` from
+`finding_render_target`) below `frame_tick - N` in the LRU are untracked, unregistered and deleted with no
+download. `=3`: the skip also applies to depth images with join copies (the copies still run after it).
+
 **Meets your work.** Fewer image creations also means fewer framebuffer rebuilds and fewer deferred
 clears on the back; it does not touch the split or the front's waits.
 

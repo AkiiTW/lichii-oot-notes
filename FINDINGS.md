@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — `EDEN_NX2_TC_RT_EVICT=4` + `RT_NO_UPLOAD=3`: texture uploads gone from the back — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@361d13546
+- **Where measured:** market, fountain laps from the start of the 150-270 s window
+- **Measured:** `texture upload` **66 → 1.3 ms/s** (131 before the texture work); uploads from guest memory 9.6 GB → **53-176 MB per 600 frames**, depth uploads 0; 6,700-7,600 stale render targets dropped early per 600 frames; collector 13-304 deletes, **0 costly, 0-2 downloads**; device memory 7.5-9.1 GB, under the expected threshold (was pinned at critical). Mean frame **40.4 → 38.5 ms**, draws/s 49.4 k → 54.0 k, frames > 100 ms **1** (worst 115 ms). From the start of the day (@d4738fce0): 48.6 → 38.5 ms (+26 % FPS), > 100 ms frames 42 → 1. Player: "much better, 21 FPS minimum, very few drops". No visual defect seen.
+- **Conclusion:** kept. The cache now holds real textures; the remaining texture-cache cost is creating ~8,000 images per 600 frames (host image reuse by shape would remove most of it).
+- **Code / switch:** `EDEN_NX2_TC_RT_EVICT=4`, `EDEN_NX2_TC_RT_NO_UPLOAD=3`
+
 ### 2026-11-07 — Ocarina moves its render targets to a new address almost every frame — confirmed
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@d18e0af21 (`EDEN_NX2_TC_LOG=1`, `RT_NO_UPLOAD=2`)
 - **Where measured:** market, 150-270 s after load
