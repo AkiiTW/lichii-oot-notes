@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — `EDEN_NX2_TC_RT_REUSE` with oldest-first eviction: market 38.7 → 35.0 ms per frame — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@a099ef505
+- **Where measured:** market, fountain laps in the 150-270 s window, camera moved everywhere; switches as in the RT_EVICT entry plus `EDEN_NX2_TC_RT_REUSE=1`. Compared with the run just before on d9bf5d902 (same zones, no reuse).
+- **Measured:** host images reused **~84 %** (5,000-8,000 per 600 frames vs 700-1,650 made new; pool 380-510 of 512 MiB, 400-1,060 old ones destroyed to stay in budget). Back thread per second: **image create 52 → 15 ms**, tc tick 80 → 45 ms (image free 18 + tc collect 26 + rest 0.5), view create 19 → 17, image join 13 → 13; texture cache upkeep **~164 → ~90 ms/s**. **Mean frame 38.7 → 35.0 ms (−10 %, ~28.6 FPS on average)**, every 600-frame block 34.3-35.7 ms; draws/s 53.9 k → 58.7 k; frames > 100 ms 1 (worst 101 ms). The back's `split wait` rose 109 → 138 ms/s: the front is closer to being the limit now. Player: "best performance I've had, even moving the camera everywhere; held 30 nearly all the time"; small drops only when water splashes on Link in the fountain (seen before this build too). No visual defect.
+- **Conclusion:** kept. From the start of the day (@d4738fce0): 48.6 → 35.0 ms per frame (**+39 % FPS**), frames > 100 ms 42 → 1. Left in texture cache upkeep: tc collect 26, image free 18, view create 17, image join 13, clear targets 10 ms/s.
+- **Code / switch:** `EDEN_NX2_TC_RT_REUSE=1` (with `RT_EVICT=4`, `RT_NO_UPLOAD=3`)
+
 ### 2026-11-07 — The back's "clear" time is the texture cache making render targets: ~170 ms/s of upkeep — confirmed
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@d9bf5d902 (new `GPU_PROFILE` zones: clear targets, image join, image create, view create, framebuffer create, tc tick)
 - **Where measured:** market, fountain laps in the 150-270 s window; switches as in the RT_EVICT entry (no RT_REUSE)
