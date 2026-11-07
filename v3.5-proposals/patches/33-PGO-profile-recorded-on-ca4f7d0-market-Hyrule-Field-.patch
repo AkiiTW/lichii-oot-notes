@@ -1,0 +1,36 @@
+From c733486aa02d7bd2241b29cd908973b4d0971d75 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 19:36:12 +0100
+Subject: [PATCH] PGO: profile recorded on ca4f7d0 (market, Hyrule Field,
+ Kokiri)
+
+The previous profile (Kokiri only, build cd1f029) predates the texture cache and buffer binding
+changes; this one covers the three places the player tests, with the switches he plays with.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ pgo/README.md | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/pgo/README.md b/pgo/README.md
+index db75622e9..abb240a69 100644
+--- a/pgo/README.md
++++ b/pgo/README.md
+@@ -4,8 +4,11 @@ Raw profiles (`.profraw`, or `.zip` archives of them) recorded with the `pgogen`
+ `lichii-tuned` (only `video_core` and `shader_recompiler` instrumented). The workflow merges them
+ into the profile the `normal` flavor uses, each weighted 4 over `eglantine.profdata`.
+ 
+-- `ocarina-village-cd1f029.profraw`: build cd1f029, ~6.5 min in Kokiri Forest (usual spot, wide
+-  view, camera turns in the village), RTX 5060 Ti, Ryzen 7 3800X.
++- `ocarina-market-field-kokiri-ca4f7d0.profraw`: build ca4f7d0, ~3.5 min each in the Castle Town
++  market (fountain laps, camera moving), Hyrule Field (running, looking around), then on foot to
++  Kokiri Forest and ~3.5 min in the village; switches clean_words, BANK_COMPARE, TC_RT_NO_UPLOAD=3,
++  TC_RT_EVICT=4, no measuring; RTX 5060 Ti, Ryzen 7 3800X. Replaces `ocarina-village-cd1f029`
++  (Kokiri only, recorded before the texture cache and buffer work).
+ 
+ A profile only fits the code it was recorded with: record a new one after large changes to the
+ GPU emulation (stale functions are skipped with -Wno-profile-instr-out-of-date).
+-- 
+2.43.0
+

@@ -1,6 +1,6 @@
 # Patch series
 
-Against `frizti-v3` (`00ef0ea6c`), in order. `git am patches/*.patch` applies all 30 cleanly; the first 29 were checked to match AkiiTW/Lichii@d18e0af21 for `src/` and `.github/`. On a newer tree use `git am -3` or cherry-pick the commit.
+Against `frizti-v3` (`00ef0ea6c`), in order. `git am patches/*.patch` applies all 41 cleanly (checked 2026-11-08). The result equals AkiiTW/Lichii `claude/v3-zen2` @33ded688f for `src/` and `.github/` **minus the 9 zortos293/Lichii commits that branch also carries** (see `../COMPATIBILITY.md`, "zortos build 116 picks"); those are upstream work, not proposals, so they are not in the series. On a newer tree use `git am -3` or cherry-pick the commit.
 
 | Patch | Commit | Proposal |
 | --- | --- | --- |
@@ -34,3 +34,14 @@ Against `frizti-v3` (`00ef0ea6c`), in order. `git am patches/*.patch` applies al
 | [`28-EDEN_NX2_TC_LOG-why-depth-images-still-get-uploaded.patch`](28-EDEN_NX2_TC_LOG-why-depth-images-still-get-uploaded.patch) | [`88730eb2a`](https://github.com/AkiiTW/Lichii/commit/88730eb2a) | P09 |
 | [`29-EDEN_NX2_TC_LOG-distinct-addresses-per-created-image-shape.patch`](29-EDEN_NX2_TC_LOG-distinct-addresses-per-created-image-shape.patch) | [`d18e0af21`](https://github.com/AkiiTW/Lichii/commit/d18e0af21) | P09 |
 | [`30-Texture-cache-drop-stale-render-targets-early-EDEN_NX2_TC_RT.patch`](30-Texture-cache-drop-stale-render-targets-early-EDEN_NX2_TC_RT.patch) | [`361d13546`](https://github.com/AkiiTW/Lichii/commit/361d13546) | P01 (`RT_EVICT`, `RT_NO_UPLOAD=3`) |
+| [`31-EDEN_NX2_TC_RT_REUSE-reuse-the-host-images-of-droppe.patch`](31-EDEN_NX2_TC_RT_REUSE-reuse-the-host-images-of-droppe.patch) | [`04595848c`](https://github.com/AkiiTW/Lichii/commit/04595848c) | P12 (first version: kept the oldest pooled images) |
+| [`32-EDEN_NX2_TC_RT_REUSE-make-Image-MarkPoolable-public.patch`](32-EDEN_NX2_TC_RT_REUSE-make-Image-MarkPoolable-public.patch) | [`ca4f7d060`](https://github.com/AkiiTW/Lichii/commit/ca4f7d060) | P12 (fix: `MarkPoolable` was private, so the switch did nothing) |
+| [`33-PGO-profile-recorded-on-ca4f7d0-market-Hyrule-Field-.patch`](33-PGO-profile-recorded-on-ca4f7d0-market-Hyrule-Field-.patch) | [`c733486aa`](https://github.com/AkiiTW/Lichii/commit/c733486aa) | P11 (pgo/README.md only; the new .profraw replaces the old one in the branch, not in the patch) |
+| [`34-GPU_PROFILE-split-the-clear-zone-and-time-texture-ca.patch`](34-GPU_PROFILE-split-the-clear-zone-and-time-texture-ca.patch) | [`d9bf5d902`](https://github.com/AkiiTW/Lichii/commit/d9bf5d902) | P09 (zones: clear targets, image join/create, view/framebuffer create, tc tick) |
+| [`35-EDEN_NX2_TC_RT_REUSE-drop-the-oldest-pooled-images-f.patch`](35-EDEN_NX2_TC_RT_REUSE-drop-the-oldest-pooled-images-f.patch) | [`a099ef505`](https://github.com/AkiiTW/Lichii/commit/a099ef505) | P12 (oldest-first eviction, 512 MiB / 32 per shape) + P09 (zones image free, tc collect) |
+| [`36-Texture-cache-cheaper-render-target-drops-and-image-.patch`](36-Texture-cache-cheaper-render-target-drops-and-image-.patch) | [`b3983fefb`](https://github.com/AkiiTW/Lichii/commit/b3983fefb) | P13 (transient-target list, view format support cache) + P09 (zones image delete, framebuffer remove) |
+| [`37-Test-panel-EDEN_NX2_TEST_PURPOSE-says-what-the-test-.patch`](37-Test-panel-EDEN_NX2_TEST_PURPOSE-says-what-the-test-.patch) | [`c79d33c80`](https://github.com/AkiiTW/Lichii/commit/c79d33c80) | P10 (`EDEN_NX2_TEST_PURPOSE`) |
+| [`38-GPU_PROFILE-split-DeleteImage-views-overlaps-sentenc.patch`](38-GPU_PROFILE-split-DeleteImage-views-overlaps-sentenc.patch) | [`96c883ce7`](https://github.com/AkiiTW/Lichii/commit/96c883ce7) | P09 (DeleteImage zones, overlaps unlinked count) |
+| [`39-Log-how-long-guest-CPU-reads-of-GPU-written-memory-w.patch`](39-Log-how-long-guest-CPU-reads-of-GPU-written-memory-w.patch) | [`5cc9051c3`](https://github.com/AkiiTW/Lichii/commit/5cc9051c3) | P09 (guest CPU readback wait log) |
+| [`40-Texture-cache-unlink-a-deleted-image-from-its-overla.patch`](40-Texture-cache-unlink-a-deleted-image-from-its-overla.patch) | [`3832dc36b`](https://github.com/AkiiTW/Lichii/commit/3832dc36b) | P13 (unlink overlaps with find + erase) |
+| [`41-Log-slow-frames-over-60-ms-with-what-the-emulator-di.patch`](41-Log-slow-frames-over-60-ms-with-what-the-emulator-di.patch) | [`33ded688f`](https://github.com/AkiiTW/Lichii/commit/33ded688f) | P09 (slow-frame log) |

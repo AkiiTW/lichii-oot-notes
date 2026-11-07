@@ -1,0 +1,185 @@
+From a099ef505b8dcb6aad6c7cc4ac83fa815d9dac99 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 20:47:02 +0100
+Subject: [PATCH] EDEN_NX2_TC_RT_REUSE: drop the oldest pooled images first;
+ time freeing and collecting
+
+The clear breakdown (test 14, market) showed texture cache upkeep at ~170 ms/s of the back:
+image create 52 ms/s (385/s, 136 us each), tc tick 80 ms/s, view create 19, image join 13. The pool
+used to refuse new images once full, so it filled with shapes no longer asked for (~35 % reused).
+Now it keeps the most recently pooled images (512 MiB, 32 per shape) and destroys the oldest to stay
+in budget. New zones split tc tick into image free (destroying or pooling freed images) and tc
+collect (collector and early render target drops).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/video_core/nx2_profile.h                  |  6 ++-
+ .../renderer_vulkan/vk_texture_cache.cpp      | 43 ++++++++++++++++---
+ .../renderer_vulkan/vk_texture_cache.h        |  8 +++-
+ src/video_core/texture_cache/texture_cache.h  | 21 ++++++---
+ 4 files changed, 62 insertions(+), 16 deletions(-)
+
+diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
+index 2fb638c04..88a73da3b 100644
+--- a/src/video_core/nx2_profile.h
++++ b/src/video_core/nx2_profile.h
+@@ -73,7 +73,9 @@ enum class Zone : u32 {
+     ImageCreate,  ///< Host image made for a new cache image (VkImage + memory)
+     ViewCreate,   ///< Image view made for a cache image
+     FramebufferCreate, ///< Framebuffer made for a new set of render targets
+-    TcTick,       ///< Texture cache end-of-frame work: collector, freeing sentenced images
++    TcTick,       ///< Texture cache end-of-frame work outside the zones below
++    ImageFree,    ///< Destroying images the GPU is done with (or pooling their host image)
++    TcCollect,    ///< Texture cache collector, early render target drops included
+     Count,
+ };
+ 
+@@ -88,7 +90,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
+     "writer wait", "list submit wait", "list GPU wait",
+     "ubo fast",      "ubo classic",   "ubo bank",       "storage binds",  "texbuf binds",
+     "clear targets", "image join",    "image create",   "view create",    "framebuffer create",
+-    "tc tick",
++    "tc tick",       "image free",    "tc collect",
+ };
+ 
+ // Read once, when the GPU thread starts (Initialize): Enabled() runs several times per method
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+index dd47d3829..6c4ba3707 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+@@ -2959,16 +2959,47 @@ vk::Image TextureCacheRuntime::TakePooledImage(u64 key) {
+ }
+ 
+ bool TextureCacheRuntime::PoolImage(u64 key, u64 bytes, vk::Image& image) {
+-    // Bounded: a few images per shape and 1 GiB in all, so the pool never holds much memory the
+-    // texture cache does not count.
+-    constexpr size_t MaxPerShape = 8;
+-    constexpr u64 MaxBytes = 1ULL << 30;
++    // Bounded in VRAM (the device memory the texture cache reads includes it). Least recently
++    // pooled first out: the first version kept the oldest and refused new ones once full, so the
++    // pool filled with shapes no longer asked for (~35 % reused).
++    constexpr size_t MaxPerShape = 32;
++    constexpr u64 MaxBytes = 512ULL << 20;
++    if (bytes > MaxBytes) {
++        return false;
++    }
+     auto& shape = image_pool[key];
+-    if (shape.size() >= MaxPerShape || image_pool_bytes + bytes > MaxBytes) {
++    if (shape.size() >= MaxPerShape) {
+         return false;
+     }
++    const u64 serial = ++image_pool_serial;
+     image_pool_bytes += bytes;
+-    shape.push_back(PooledImage{std::move(image), bytes});
++    shape.push_back(PooledImage{std::move(image), bytes, serial});
++    image_pool_order.emplace_back(key, serial);
++    while (image_pool_bytes > MaxBytes && !image_pool_order.empty()) {
++        const auto [old_key, old_serial] = image_pool_order.front();
++        image_pool_order.pop_front();
++        const auto it = image_pool.find(old_key);
++        if (it == image_pool.end()) {
++            continue;
++        }
++        auto& images = it->second;
++        const auto found = std::ranges::find(images, old_serial, &PooledImage::serial);
++        if (found == images.end()) {
++            continue; // Taken already
++        }
++        image_pool_bytes -= found->bytes;
++        images.erase(found);
++        ++pooled_image_evictions;
++    }
++    if (image_pool_order.size() > 4 * 4096) {
++        // Taken entries pile up at the back of the order when the pool never overflows.
++        std::erase_if(image_pool_order, [this](const std::pair<u64, u64>& entry) {
++            const auto it = image_pool.find(entry.first);
++            return it == image_pool.end() ||
++                   std::ranges::find(it->second, entry.second, &PooledImage::serial) ==
++                       it->second.end();
++        });
++    }
+     return true;
+ }
+ 
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.h b/src/video_core/renderer_vulkan/vk_texture_cache.h
+index 03972eefe..8ee9ccccd 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.h
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.h
+@@ -233,16 +233,22 @@ public:
+     /// EDEN_NX2_TC_RT_REUSE: host images of render targets dropped by EDEN_NX2_TC_RT_EVICT are
+     /// kept by shape (pool key) and handed to the next image of that shape instead of a new one.
+     [[nodiscard]] vk::Image TakePooledImage(u64 key);
+-    /// Keeps `image` for reuse; returns false (the caller destroys it) when the pool is full.
++    /// Keeps `image` for reuse. When the pool is over its budget, the images pooled longest ago
++    /// are destroyed first, so the pool follows the shapes the game uses now.
+     bool PoolImage(u64 key, u64 bytes, vk::Image& image);
+     [[nodiscard]] static bool ImageReuseEnabled();
+     u64 pooled_image_hits = 0;   ///< Images taken from the pool (logged with the texture cache)
+     u64 pooled_image_misses = 0; ///< Pool keys asked for with nothing pooled
++    u64 pooled_image_evictions = 0; ///< Pooled images destroyed to stay in budget
+     struct PooledImage {
+         vk::Image image;
+         u64 bytes;
++        u64 serial;
+     };
+     std::unordered_map<u64, std::vector<PooledImage>> image_pool;
++    /// (key, serial) of every pooled image in pooling order; entries already taken are skipped.
++    std::deque<std::pair<u64, u64>> image_pool_order;
++    u64 image_pool_serial = 0;
+     u64 image_pool_bytes = 0;
+ 
+     void BarrierFeedbackLoop();
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index a021de3eb..6d471e831 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -401,6 +401,7 @@ void TextureCache<P>::TickFrame() {
+         }
+     }
+     if constexpr (requires { runtime.CurrentTick(); }) {
++        VideoCommon::Nx2Profile::Scope free_scope{VideoCommon::Nx2Profile::Zone::ImageFree};
+         while (!gpu_sentenced_images.empty() &&
+                runtime.IsFree(gpu_sentenced_images.front().tick)) {
+             gpu_sentenced_bytes -= gpu_sentenced_images.front().bytes;
+@@ -483,10 +484,12 @@ void TextureCache<P>::TickFrame() {
+         transient_target_deletes = 0;
+         if constexpr (requires { runtime.pooled_image_hits; }) {
+             LOG_INFO(HW_GPU, "Texture cache last 600 frames: host images reused {}, made new for a "
+-                             "poolable shape {}, {} MiB pooled (EDEN_NX2_TC_RT_REUSE)",
++                             "poolable shape {}, {} MiB pooled, {} pooled images destroyed to stay in "
++                             "budget (EDEN_NX2_TC_RT_REUSE)",
+                      runtime.pooled_image_hits, runtime.pooled_image_misses,
+-                     runtime.image_pool_bytes >> 20);
++                     runtime.image_pool_bytes >> 20, runtime.pooled_image_evictions);
+             runtime.pooled_image_hits = runtime.pooled_image_misses = 0;
++            runtime.pooled_image_evictions = 0;
+         }
+         LOG_INFO(HW_GPU, "Texture cache last 600 frames: depth images marked CPU-modified by a "
+                          "guest memory write {} (writes <=4K {}, <=64K {}, <=1M {}, larger {}; whole "
+@@ -521,13 +524,17 @@ void TextureCache<P>::TickFrame() {
+         images_created = images_deleted = 0;
+     }
+     if (total_used_memory > minimum_memory) {
++        VideoCommon::Nx2Profile::Scope collect_scope{VideoCommon::Nx2Profile::Zone::TcCollect};
+         RunGarbageCollector();
+     }
+-    sentenced_images.Tick();
+-    sentenced_image_index = (sentenced_image_index + 1) % TICKS_TO_DESTROY;
+-    sentenced_image_bytes[sentenced_image_index] = 0;
+-    sentenced_framebuffers.Tick();
+-    sentenced_image_view.Tick();
++    {
++        VideoCommon::Nx2Profile::Scope free_scope{VideoCommon::Nx2Profile::Zone::ImageFree};
++        sentenced_images.Tick();
++        sentenced_image_index = (sentenced_image_index + 1) % TICKS_TO_DESTROY;
++        sentenced_image_bytes[sentenced_image_index] = 0;
++        sentenced_framebuffers.Tick();
++        sentenced_image_view.Tick();
++    }
+     TickAsyncDecode();
+     TickAsyncUnswizzle();
+     if (frame_tick % 600 == 0 && !uploaded_ranges.empty()) {
+-- 
+2.43.0
+

@@ -1,0 +1,204 @@
+From b3983fefbd6d4a34ef07d1f995dbf977ae987d42 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 21:43:46 +0100
+Subject: [PATCH] Texture cache: cheaper render target drops and image views
+
+- EDEN_NX2_TC_RT_EVICT walked the LRU list from its oldest end every frame, through the thousands
+  of textures older than a few frames, to find the ~15 stale render targets; it now checks a list
+  of the transient targets only (kept in JoinImages / DeleteImage).
+- Image views asked the driver for the format's depth comparison / min-max support each time
+  (~600 views a second); the answer is now kept per format.
+- New GPU_PROFILE zones: image delete, framebuffer remove (RemoveFramebuffers walks every
+  framebuffer for each deleted image).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/common/lru_cache.h                        |  5 +++
+ src/video_core/nx2_profile.h                  |  4 ++-
+ .../renderer_vulkan/vk_texture_cache.cpp      | 33 +++++++++++--------
+ .../renderer_vulkan/vk_texture_cache.h        |  7 ++++
+ src/video_core/texture_cache/texture_cache.h  | 25 +++++++++++---
+ .../texture_cache/texture_cache_base.h        |  3 ++
+ 6 files changed, 59 insertions(+), 18 deletions(-)
+
+diff --git a/src/common/lru_cache.h b/src/common/lru_cache.h
+index 952ba0eb8..3319218ec 100644
+--- a/src/common/lru_cache.h
++++ b/src/common/lru_cache.h
+@@ -52,6 +52,11 @@ public:
+         Attach(item);
+     }
+ 
++    /// Tick an item was inserted or last touched with.
++    [[nodiscard]] TickType GetTick(size_t id) const {
++        return item_pool[id].tick;
++    }
++
+     void Free(size_t id) {
+         auto& item = item_pool[id];
+         Detach(item);
+diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
+index 88a73da3b..300e7ad15 100644
+--- a/src/video_core/nx2_profile.h
++++ b/src/video_core/nx2_profile.h
+@@ -76,6 +76,8 @@ enum class Zone : u32 {
+     TcTick,       ///< Texture cache end-of-frame work outside the zones below
+     ImageFree,    ///< Destroying images the GPU is done with (or pooling their host image)
+     TcCollect,    ///< Texture cache collector, early render target drops included
++    ImageDelete,  ///< Removing an image from the cache (DeleteImage, framebuffers apart)
++    FramebufferRemove, ///< Looking for and dropping the framebuffers of a deleted image's views
+     Count,
+ };
+ 
+@@ -90,7 +92,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
+     "writer wait", "list submit wait", "list GPU wait",
+     "ubo fast",      "ubo classic",   "ubo bank",       "storage binds",  "texbuf binds",
+     "clear targets", "image join",    "image create",   "view create",    "framebuffer create",
+-    "tc tick",       "image free",    "tc collect",
++    "tc tick",       "image free",    "tc collect",     "image delete",   "framebuffer remove",
+ };
+ 
+ // Read once, when the GPU thread starts (Initialize): Enabled() runs several times per method
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+index 6c4ba3707..339531a4a 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+@@ -4317,20 +4317,27 @@ ImageView::ImageView(TextureCacheRuntime& runtime, const VideoCommon::ImageViewI
+                                  ? VK_FORMAT_BC1_RGBA_SRGB_BLOCK
+                                  : VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+     }
+-    if (device->ApiVersion() >= VK_API_VERSION_1_3) {
+-        const VkFormatProperties3 properties3 =
+-            device->GetPhysical().GetFormatProperties3(format_info.format);
+-        supports_depth_comparison =
+-            (properties3.optimalTilingFeatures &
+-             VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT) != 0;
+-        supports_minmax_filter = (properties3.optimalTilingFeatures &
+-                                  VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT) != 0;
+-    } else {
+-        supports_depth_comparison = true;
+-        supports_minmax_filter =
+-            (device->GetPhysical().GetFormatProperties(format_info.format).optimalTilingFeatures &
+-             VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT) != 0;
++    const auto [support_it, support_is_new] =
++        runtime.view_format_support.try_emplace(format_info.format);
++    if (support_is_new) {
++        auto& support = support_it->second;
++        if (device->ApiVersion() >= VK_API_VERSION_1_3) {
++            const VkFormatProperties3 properties3 =
++                device->GetPhysical().GetFormatProperties3(format_info.format);
++            support.depth_comparison =
++                (properties3.optimalTilingFeatures &
++                 VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT) != 0;
++            support.minmax_filter = (properties3.optimalTilingFeatures &
++                                     VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT) != 0;
++        } else {
++            support.depth_comparison = true;
++            support.minmax_filter =
++                (device->GetPhysical().GetFormatProperties(format_info.format).optimalTilingFeatures &
++                 VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT) != 0;
++        }
+     }
++    supports_depth_comparison = support_it->second.depth_comparison;
++    supports_minmax_filter = support_it->second.minmax_filter;
+     if (VideoCommon::RenderTrace::Enabled() &&
+         (aspect_mask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0) {
+         LOG_DEBUG(Render_Vulkan,
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.h b/src/video_core/renderer_vulkan/vk_texture_cache.h
+index 8ee9ccccd..e4fa9c655 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.h
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.h
+@@ -240,6 +240,13 @@ public:
+     u64 pooled_image_hits = 0;   ///< Images taken from the pool (logged with the texture cache)
+     u64 pooled_image_misses = 0; ///< Pool keys asked for with nothing pooled
+     u64 pooled_image_evictions = 0; ///< Pooled images destroyed to stay in budget
++    /// Depth comparison and min/max filter support by view format: asked once per format instead
++    /// of on every image view made (~600 a second in Ocarina's market).
++    struct ViewFormatSupport {
++        bool depth_comparison;
++        bool minmax_filter;
++    };
++    std::unordered_map<VkFormat, ViewFormatSupport> view_format_support;
+     struct PooledImage {
+         vk::Image image;
+         u64 bytes;
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index 6d471e831..50e4fa123 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -145,13 +145,18 @@ void TextureCache<P>::RunGarbageCollector() {
+     }();
+     if (rt_evict_frames != 0 && frame_tick > rt_evict_frames) {
+         boost::container::small_vector<ImageId, 64> stale;
+-        lru_cache.ForEachItemBelow(frame_tick - rt_evict_frames, [&](ImageId image_id) {
++        const u64 threshold = frame_tick - rt_evict_frames;
++        for (const ImageId image_id : transient_targets) {
+             const Image& image = slot_images[image_id];
+-            if (image.transient_target && False(image.flags & ImageFlagBits::IsDecoding)) {
++            if (True(image.flags & ImageFlagBits::Registered) &&
++                False(image.flags & ImageFlagBits::IsDecoding) &&
++                lru_cache.GetTick(image.lru_index) <= threshold) {
+                 stale.push_back(image_id);
++                if (stale.size() >= 64) {
++                    break;
++                }
+             }
+-            return stale.size() >= 64;
+-        });
++        }
+         for (const ImageId image_id : stale) {
+             Image& image = slot_images[image_id];
+             if constexpr (requires { image.MarkPoolable(); }) {
+@@ -2784,6 +2789,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
+ 
+     new_image.allocation_tick = frame_tick;
+     new_image.transient_target = finding_render_target;
++    if (finding_render_target) {
++        transient_targets.push_back(new_image_id);
++    }
+     {
+         // Which shapes are being created (periodic log): format, type, levels, layers, size.
+         const u64 key = (u64{static_cast<u32>(new_info.format)} << 56) |
+@@ -3611,8 +3619,16 @@ void TextureCache<P>::UntrackImage(ImageBase& image, ImageId image_id) {
+ 
+ template <class P>
+ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
++    VideoCommon::Nx2Profile::Scope delete_scope{VideoCommon::Nx2Profile::Zone::ImageDelete};
+     ImageBase& image = slot_images[image_id];
+     ++images_deleted;
++    if (image.transient_target) {
++        if (const auto it = std::ranges::find(transient_targets, image_id);
++            it != transient_targets.end()) {
++            *it = transient_targets.back();
++            transient_targets.pop_back();
++        }
++    }
+     // Drop every decode still queued for it, whatever IsDecoding says: an image re-decoded while
+     // a decode was in flight has two, and the first to finish clears the flag. A decode left
+     // behind was uploaded into the next image to take this slot (another texture's data: garbage
+@@ -3747,6 +3763,7 @@ void TextureCache<P>::RemoveImageViewReferences(std::span<const ImageViewId> rem
+ 
+ template <class P>
+ void TextureCache<P>::RemoveFramebuffers(std::span<const ImageViewId> removed_views) {
++    VideoCommon::Nx2Profile::Scope remove_scope{VideoCommon::Nx2Profile::Zone::FramebufferRemove};
+     runtime.FlushDeferredClear();
+     auto it = framebuffers.begin();
+     while (it != framebuffers.end()) {
+diff --git a/src/video_core/texture_cache/texture_cache_base.h b/src/video_core/texture_cache/texture_cache_base.h
+index 9b042df5c..f1e418998 100644
+--- a/src/video_core/texture_cache/texture_cache_base.h
++++ b/src/video_core/texture_cache/texture_cache_base.h
+@@ -154,6 +154,9 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
+     std::array<u64, 4> upload_bytes_by_kind{};
+     u64 uploads_gpu_written{};
+     u64 render_target_uploads_skipped{}; ///< EDEN_NX2_TC_RT_NO_UPLOAD (last 600 frames)
++    /// Images with transient_target set, so EDEN_NX2_TC_RT_EVICT checks only these each frame
++    /// instead of walking the whole LRU list (thousands of textures older than a few frames).
++    std::vector<ImageId> transient_targets;
+     u64 transient_target_deletes{};      ///< EDEN_NX2_TC_RT_EVICT (last 600 frames)
+     /// EDEN_NX2_TC_LOG: why depth/stencil images got marked CPU-modified (last 600 frames):
+     /// a guest memory write, an unmap, created with an older image to copy from, created sparse.
+-- 
+2.43.0
+

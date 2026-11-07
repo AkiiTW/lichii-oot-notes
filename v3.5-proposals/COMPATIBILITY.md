@@ -21,6 +21,10 @@ the same code or the same problem, and what to check. Your Claude: add a line wh
 | `src/yuzu/main.cpp` `BuiltinSwitches` | P05 removes `EDEN_NX2_PREFLUSH` | Your plug-and-play settings `4f515cfc07` | Make sure PREFLUSH did not come back |
 | `vk_host_pacer.cpp`, `video_core/CMakeLists.txt` | P06 dwmapi | Pacer safety `82a514211d`, 30 FPS phase alignment `7d5ddd36b7` | P06 is only the link line; no conflict expected |
 | `core/core.cpp`, `yuzu/main_window.*` | P10 test window | — | Independent |
+| `vk_texture_cache.{h,cpp}` `Image` constructor / destructor, `TextureCacheRuntime` | P12 image pool, P13 view format cache | Your texture reuse work (21:45 status) | Take P12 rather than a second pool; `MarkPoolable` must stay public (a `requires` test calls it) |
+| `texture_cache.h` `RunGarbageCollector` (RT_EVICT loop), `JoinImages`, `DeleteImage` | P12, P13, P09 zones | Your back-thread work | P13's `transient_targets` list must be kept in step in `DeleteImage`; the overlap unlink keeps order |
+| `gpu.cpp` `OnCPURead` | P09 readback wait log | Your reactive flush / preflush work, zortos #641 "async reactive flush" | Log only; it measures your change |
+| `vk_host_pacer.{h,cpp}` `NoteShown` | P09 slow-frame log | Pacer safety `82a514211d`, phase alignment `7d5ddd36b7` | One call per shown frame; no behaviour change |
 
 ## Same problem, different halves
 
@@ -30,14 +34,29 @@ the same code or the same problem, and what to check. Your Claude: add a line wh
   lower there (~+15 %).
 - **Render target churn vs blits.** If your blit tracking shows blit destinations being recreated like
   the targets in P01, tell AkiiTW: the same "reuse a free image of the same shape" fix would cover both.
-- **PGO.** Your retrained profile (market route + Hyrule Field) can replace AkiiTW's
-  `pgo/ocarina-village-cd1f029.profraw` once the trees are close.
+- **PGO.** Your retrained profile (+2.5 FPS on your route) can replace AkiiTW's
+  `pgo/ocarina-market-field-kokiri-ca4f7d0.profraw` once the trees are close.
+- **Guest readback waits.** ~110-200 ms/s of the guest CPU waiting on GPU-written pages (P09 log): your
+  preflush / async reactive flush work is the fix; AkiiTW's branch only measures it.
+
+## zortos build 116 picks carried by AkiiTW's branch
+
+`claude/v3-zen2` also carries 9 commits from zortos293/Lichii `nx2` (build-116), cherry-picked on
+2026-11-07/08 and **not** part of the patch series: #412 (back-thread bookkeeping; one conflict: this
+tree already had its usage-tracker `tracked` guard, fixed in 9465605cf), #446 (suspended channels polled
+every 50 µs), #174 (software HMMA unroll), #481 (RangeSet as a sorted array), #475/#582 and #521/#583
+(HMMA on cooperative matrices), #478/#580 (range page-walk reuse), #250 (skip GPU-write invalidations of
+empty pages), #351 (read-only table pointers bound past 64 MiB: the white haze over Hyrule Field).
+Not taken: DLSS #606 (needs Streamline), #616, #413 (this tree has an equivalent `MayBeGpuModified`),
+#178, #641 (17 k lines: waiting for your port). If your V3.5 has your own ports of these, keep yours.
+Together with the proposals they brought the market to 33.6 ms per frame (`../FINDINGS.md`, 2026-11-08).
 
 ## Switch names
 
 No collisions found with V3's switches. New names: `EDEN_NX2_TC_RT_NO_UPLOAD`, `EDEN_NX2_BANK_COMPARE`,
 `EDEN_NX2_THREAD_USAGE`, `EDEN_NX2_TEST_START`, `EDEN_NX2_TEST_SECONDS`, `EDEN_NX2_TEST_LABEL`,
-`EDEN_NX2_TEST_PREPARE`, `EDEN_NX2_VERTEX_KEY_MERGE`, `EDEN_NX2_PIPELINE_DIFF`,
+`EDEN_NX2_TEST_PREPARE`, `EDEN_NX2_TEST_PURPOSE`, `EDEN_NX2_TC_RT_EVICT`, `EDEN_NX2_TC_RT_REUSE`,
+`EDEN_NX2_VERTEX_KEY_MERGE`, `EDEN_NX2_PIPELINE_DIFF`,
 `EDEN_NX2_PIPELINE_EVICT_FRAMES`, `EDEN_NX2_PLACEMENT*`. If one clashes with yours, rename ours.
 
 ## Platforms

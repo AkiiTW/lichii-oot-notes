@@ -1,0 +1,187 @@
+From 33ded688ffba80e79778d9399280cb9ebf53a4b8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 00:41:25 +0100
+Subject: [PATCH] Log slow frames (over 60 ms) with what the emulator did
+ during them
+
+For each frame shown more than 60 ms after the previous one, the host pacer logs the guest CPU's
+readbacks of GPU-written memory and their waits, textures uploaded, images made, pipelines built
+and collector deletes since the frame before: the 10 s averages hide what one hitch is made of.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/video_core/gpu.cpp                        |  3 ++
+ src/video_core/nx2_perf.h                     | 13 ++++++++
+ .../renderer_vulkan/vk_host_pacer.cpp         | 30 +++++++++++++++++++
+ .../renderer_vulkan/vk_host_pacer.h           |  3 ++
+ .../renderer_vulkan/vk_pipeline_cache.cpp     |  2 ++
+ src/video_core/texture_cache/texture_cache.h  |  6 ++++
+ 6 files changed, 57 insertions(+)
+
+diff --git a/src/video_core/gpu.cpp b/src/video_core/gpu.cpp
+index 7f17c44cc..877581786 100644
+--- a/src/video_core/gpu.cpp
++++ b/src/video_core/gpu.cpp
+@@ -25,6 +25,7 @@
+ #include "core/hle/service/nvdrv/nvdata.h"
+ #include "core/perf_stats.h"
+ #include "video_core/cdma_pusher.h"
++#include "video_core/nx2_perf.h"
+ #include "video_core/control/channel_state.h"
+ #include "video_core/control/scheduler.h"
+ #include "video_core/dma_pusher.h"
+@@ -250,6 +251,8 @@ struct GPU::Impl {
+         static u64 total_bytes{};
+         const u64 ns = static_cast<u64>(
+             std::chrono::duration_cast<std::chrono::nanoseconds>(waited).count());
++        VideoCommon::Nx2Perf::g_hitch.readback_wait_ns.fetch_add(ns, std::memory_order_relaxed);
++        VideoCommon::Nx2Perf::g_hitch.readbacks.fetch_add(1, std::memory_order_relaxed);
+         std::scoped_lock lock{report_mutex};
+         ++count;
+         total_ns += ns;
+diff --git a/src/video_core/nx2_perf.h b/src/video_core/nx2_perf.h
+index 76b1bad79..25a53b84d 100644
+--- a/src/video_core/nx2_perf.h
++++ b/src/video_core/nx2_perf.h
+@@ -122,4 +122,17 @@ inline std::atomic<long long> g_guest_frame_interval_ns{0};
+ /// present pacing (nx2_gsv.h) times its frames to whole multiples of it (genlock).
+ inline std::atomic<long long> g_host_refresh_ns{0};
+ 
++/// What happened between two shown frames, for the slow-frame log (vk_host_pacer.cpp): running
++/// totals the pacer reads at each frame shown and logs the difference for frames over 60 ms.
++struct HitchCounters {
++    std::atomic<u64> readback_wait_ns{};  ///< Guest CPU reads of GPU-written memory (gpu.cpp)
++    std::atomic<u64> readbacks{};
++    std::atomic<u64> texture_uploads{};   ///< Images filled from guest memory
++    std::atomic<u64> texture_upload_bytes{};
++    std::atomic<u64> images_created{};
++    std::atomic<u64> pipelines_built{};   ///< Graphics and compute pipelines made
++    std::atomic<u64> collector_deletes{}; ///< Images the texture cache collector removed
++};
++inline HitchCounters g_hitch;
++
+ } // namespace VideoCommon::Nx2Perf
+diff --git a/src/video_core/renderer_vulkan/vk_host_pacer.cpp b/src/video_core/renderer_vulkan/vk_host_pacer.cpp
+index a6fa7072b..ad97c9e6e 100644
+--- a/src/video_core/renderer_vulkan/vk_host_pacer.cpp
++++ b/src/video_core/renderer_vulkan/vk_host_pacer.cpp
+@@ -166,6 +166,7 @@ void HostPacer::NoteShown(u64 id, Clock::time_point shown, bool was_lost) {
+     }
+     if (last_shown && last_shown_id + 1 == id) {
+         const double interval = static_cast<double>(Ns{shown - *last_shown}.count());
++        LogSlowFrame(interval / 1e6);
+         interval_sum_ms += interval / 1e6;
+         interval_max_ms = (std::max)(interval_max_ms, interval / 1e6);
+         const auto count = std::clamp<s64>(std::llround(interval / refresh_ns), 0, 5);
+@@ -198,6 +199,35 @@ void HostPacer::NoteShown(u64 id, Clock::time_point shown, bool was_lost) {
+     Report(shown);
+ }
+ 
++void HostPacer::LogSlowFrame(double interval_ms) {
++    // Read every frame so the difference covers this frame only; logged for frames over 60 ms
++    // (a hitch at 30 fps), with what the emulator did meanwhile.
++    auto& h = VideoCommon::Nx2Perf::g_hitch;
++    const std::array<u64, 7> now{
++        h.readback_wait_ns.load(std::memory_order_relaxed),
++        h.readbacks.load(std::memory_order_relaxed),
++        h.texture_uploads.load(std::memory_order_relaxed),
++        h.texture_upload_bytes.load(std::memory_order_relaxed),
++        h.images_created.load(std::memory_order_relaxed),
++        h.pipelines_built.load(std::memory_order_relaxed),
++        h.collector_deletes.load(std::memory_order_relaxed),
++    };
++    std::array<u64, 7> delta{};
++    for (size_t i = 0; i < now.size(); ++i) {
++        delta[i] = now[i] - hitch_last[i];
++    }
++    hitch_last = now;
++    if (interval_ms < 60.0) {
++        return;
++    }
++    LOG_INFO(Render_Vulkan,
++             "Slow frame: {:.1f} ms shown; meanwhile guest readbacks {} waiting {:.1f} ms, "
++             "textures uploaded {} ({} KiB), images made {}, pipelines built {}, collector "
++             "deletes {}",
++             interval_ms, delta[1], delta[0] / 1e6, delta[2], delta[3] >> 10, delta[4], delta[5],
++             delta[6]);
++}
++
+ void HostPacer::NoteHold(Ns hold) {
+     ++held;
+     hold_sum_ms += Ms{hold}.count();
+diff --git a/src/video_core/renderer_vulkan/vk_host_pacer.h b/src/video_core/renderer_vulkan/vk_host_pacer.h
+index 94e0f8222..4f229d311 100644
+--- a/src/video_core/renderer_vulkan/vk_host_pacer.h
++++ b/src/video_core/renderer_vulkan/vk_host_pacer.h
+@@ -91,6 +91,9 @@ private:
+     std::array<u32, 6> refreshes_shown{}; // 0 (same refresh), 1, 2, 3, 4, 5+
+     u32 frames{}, held{}, missed{}, lost{}, caught_up{};
+     double interval_sum_ms{}, interval_max_ms{}, hold_sum_ms{}, latency_sum_ms{};
++    /// Totals of VideoCommon::Nx2Perf::g_hitch at the last frame shown (slow-frame log).
++    std::array<u64, 7> hitch_last{};
++    void LogSlowFrame(double interval_ms);
+ };
+ 
+ /// The display refresh period from the OS compositor (Windows); nullopt elsewhere or on failure.
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index 11fd64113..3e5e77128 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -1797,6 +1797,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+     std::span<Shader::Environment* const> envs, PipelineStatistics* statistics,
+     bool build_in_parallel, std::shared_ptr<ShaderPools> emit_pools,
+     std::unique_ptr<EmissionBudget::Reservation> reservation) try {
++    VideoCommon::Nx2Perf::g_hitch.pipelines_built.fetch_add(1, std::memory_order_relaxed);
+     auto hash = key.Hash();
+     LOG_DEBUG(Render_Vulkan, "{:#016x}", hash);
+     size_t env_index{0};
+@@ -2133,6 +2134,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
+ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
+     const ComputePipelineCacheKey& key, const ShaderInfo* shader) {
+     const auto begin = std::chrono::steady_clock::now();
++    VideoCommon::Nx2Perf::g_hitch.pipelines_built.fetch_add(1, std::memory_order_relaxed);
+     SCOPE_EXIT {
+         ReportRuntimePipeline("Compute", begin,
+                               fmt::format("pipeline={:016x} s6:{:016x} address={:#x}", key.Hash(),
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index 2e8356a3f..3b5322af5 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -32,6 +32,7 @@
+ #include "video_core/texture_cache/texture_cache_base.h"
+ #include "video_core/texture_cache/util.h"
+ #include "video_core/nx2.h"
++#include "video_core/nx2_perf.h"
+ #include "video_core/nx2_profile.h"
+ #include "video_core/render_trace.h"
+ #include "video_core/textures/decoders.h"
+@@ -215,6 +216,7 @@ void TextureCache<P>::RunGarbageCollector() {
+             UntrackImage(image, image_id);
+         }
+         ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
++        Nx2Perf::g_hitch.collector_deletes.fetch_add(1, std::memory_order_relaxed);
+         UnregisterImage(image_id);
+         DeleteImage(image_id, image.scale_tick > frame_tick + 5);
+         if (aggressive_mode && total_used_memory < critical_memory) {
+@@ -1886,6 +1888,9 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
+                                                                                  : 3;
+         ++uploads_by_kind[kind];
+         upload_bytes_by_kind[kind] += image.guest_size_bytes;
++        Nx2Perf::g_hitch.texture_uploads.fetch_add(1, std::memory_order_relaxed);
++        Nx2Perf::g_hitch.texture_upload_bytes.fetch_add(image.guest_size_bytes,
++                                                         std::memory_order_relaxed);
+         uploads_gpu_written += True(image.flags & ImageFlagBits::GpuModified) ? 1 : 0;
+     }
+     if (!UploadInChunks(image)) {
+@@ -2787,6 +2792,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
+     }
+     const ImageId new_image_id = [&] {
+         VideoCommon::Nx2Profile::Scope create_scope{VideoCommon::Nx2Profile::Zone::ImageCreate};
++        Nx2Perf::g_hitch.images_created.fetch_add(1, std::memory_order_relaxed);
+         return slot_images.insert(runtime, new_info, gpu_addr, cpu_addr);
+     }();
+     Image& new_image = slot_images[new_image_id];
+-- 
+2.43.0
+

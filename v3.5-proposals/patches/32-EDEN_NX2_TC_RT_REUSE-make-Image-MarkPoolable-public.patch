@@ -1,0 +1,47 @@
+From ca4f7d06049d575dba0334529dcccded235af711 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 18:48:51 +0100
+Subject: [PATCH] EDEN_NX2_TC_RT_REUSE: make Image::MarkPoolable public
+
+It sat in Image's private section, so the texture cache's requires-expression was false and the
+call was skipped: test 10 logged ~8,000 dropped targets and new images per 600 frames but nothing
+ever went into the pool (0 reused, 0 MiB pooled).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/video_core/renderer_vulkan/vk_texture_cache.h | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.h b/src/video_core/renderer_vulkan/vk_texture_cache.h
+index 13e744cea..03972eefe 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.h
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.h
+@@ -580,6 +580,13 @@ public:
+ 
+     friend class BlockLinearUnswizzle3DPass;
+ 
++    /// Render target whose host image may go back to the runtime's pool (EDEN_NX2_TC_RT_REUSE).
++    /// Public: the texture cache tests for it with a requires-expression, which is false (and
++    /// silently skips the call) when the member is not accessible.
++    void MarkPoolable() noexcept {
++        poolable = true;
++    }
++
+ private:
+     bool BlitScaleHelper(bool scale_up);
+ 
+@@ -679,10 +686,6 @@ private:
+     vk::Image original_image;
+     vk::Image scaled_image;
+ 
+-    /// Render target whose host image may go back to the runtime's pool (EDEN_NX2_TC_RT_REUSE).
+-    void MarkPoolable() noexcept {
+-        poolable = true;
+-    }
+     u64 pool_key = 0; ///< Shape key when this image's host image can be pooled, else 0
+     bool poolable = false;
+ 
+-- 
+2.43.0
+

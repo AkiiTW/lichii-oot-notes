@@ -69,6 +69,10 @@ start of `RunGarbageCollector`, up to 64 images with `transient_target` (set in 
 `finding_render_target`) below `frame_tick - N` in the LRU are untracked, unregistered and deleted with no
 download. `=3`: the skip also applies to depth images with join copies (the copies still run after it).
 
+**Later (2026-11-07 evening).** `RT_EVICT` no longer walks the LRU (P13, @b3983fefb); `RT_EVICT=2`
+was tested and is worse (image creations 396 → 672/s: some targets are reused after 2-3 idle frames), so
+4 stays. P12 builds on `RT_EVICT`.
+
 **Meets your work.** Fewer image creations also means fewer framebuffer rebuilds and fewer deferred
 clears on the back; it does not touch the split or the front's waits.
 
@@ -113,6 +117,11 @@ take it out of `default_off` for V3.5 once checked.
 **Measured:** `storage binds` 64.4 → 17.1 ms/s; draws/s +3 % (scene noise around it). No defect in the
 market. Not yet checked in Kokiri Forest against the zortos293/Lichii#161 slab; `EDEN_NX2_PERF_VERIFY=1`
 logs any wrong clean word (`Nx2Perf draw-binds: clean tracker words wrong near ...`).
+
+**Update 2026-11-07 evening.** On for every Setup A run since; the PGO recording session (market,
+Hyrule Field, then on foot into Kokiri village, ~3.5 min each) showed no defect, but nobody looked for
+the #161 slab on purpose. Your 20:03 A/B (42.8 vs 42.4 FPS) matches Setup A: the zone saving does not
+show as FPS while the two GPU threads take turns.
 
 ---
 
@@ -203,7 +212,21 @@ numbers.
   Appended at the end so your zone indices do not move.
 - `EDEN_NX2_TC_LOG`: uploads by kind (ASTC / BCn / depth / colour) and into GPU-written images; created
   shapes at Info with distinct addresses per shape; render targets not uploaded (P01); why depth images
-  are marked CPU-modified.
+  are marked CPU-modified; host images reused / made new / pooled (P12); images deleted and overlaps
+  unlinked (P13).
+- More `GPU_PROFILE` zones, appended after the ones above: `clear targets` (a clear finding its render
+  targets and framebuffer — the old `clear` time was nearly all this and what it nests), `image join`,
+  `image create` (VkImage + memory), `view create`, `framebuffer create`, `tc tick`, `image free`,
+  `tc collect`, `image delete`, `framebuffer remove`, `delete views`, `delete overlaps`,
+  `delete sentence`. They showed texture-cache upkeep at ~170 ms/s of the back in the market (→ P12, P13).
+- Guest CPU readback wait log (`GPU::OnCPURead`, always on, every 10 s): reads/s, ms waited, longest wait,
+  KiB. Market: ~120-150 reads/s, 110-200 ms/s waited (~1.2 ms each) — the guest CPU stops that long while
+  the GPU threads catch up; the game's auto-exposure / scene-shading analyzer and occlusion queries are
+  the likely readers. Your preflush / async reactive flush work is the fix; this line measures it.
+- Slow-frame log (`HostPacer::LogSlowFrame`, always on): each frame shown more than 60 ms after the one
+  before is logged with the guest readbacks and their wait, textures uploaded, images made, pipelines
+  built and collector deletes since the previous frame (`Nx2Perf::g_hitch` counters). Meant for the
+  spikes on arriving in a new area, which the fixed test window (150 s after load) never sees.
 
 ---
 
@@ -212,7 +235,9 @@ numbers.
 `common/nx2_test_window.{h,cpp}` (started in `core.cpp` right after `Nx2Sampler::StartFromEnvironment`,
 stopped in `ShutdownMainProcess`) and `yuzu/render/test_overlay.{h,cpp}` (created in
 `MainWindow::OnLoadComplete`, deleted with the performance overlay). Switches:
-`EDEN_NX2_TEST_START`, `EDEN_NX2_TEST_SECONDS`, `EDEN_NX2_TEST_LABEL`, `EDEN_NX2_TEST_PREPARE`; follows
+`EDEN_NX2_TEST_START`, `EDEN_NX2_TEST_SECONDS`, `EDEN_NX2_TEST_LABEL`, `EDEN_NX2_TEST_PREPARE`,
+`EDEN_NX2_TEST_PURPOSE` (what the test measures, wrapped under the title for the whole test, the panel
+grows to fit; also logged — asked for by the player so he knows what each run is for); follows
 `EDEN_NX2_SAMPLE_START/SECONDS` when the sampler is on. Log lines `Nx2TestWindow: recording starts` /
 `ends` let scripts cut a log to the window (`../tools/cmp_windows.py`). Your fixed-route steering is the
 better tool for A/B; this one is for runs played by hand.
@@ -226,3 +251,61 @@ from `eglantine.profdata` and the profiles in `pgo/` (weight 4), flavors `normal
 emulation and the shader recompiler instrumented) and `symbols` (`-gline-tables-only -gcodeview`,
 `lichii.pdb`). Packages DLLs by walking `objdump -p` imports. Note: MSYS2's zlib 1.4 now ships
 `libz-1.dll`; copy the whole artifact, not only the exe. Optional for an MSVC release.
+
+---
+
+## P12 — Reuse the host images of dropped render targets (`EDEN_NX2_TC_RT_REUSE`)
+
+**Problem.** With P01 the market still makes ~400 new render-target images a second (Ocarina moves its
+targets to a new address almost every frame). The zones of @d9bf5d902 put a price on it: **image create
+52 ms/s (136 µs each: VkImage + VMA memory)** and `tc tick` 80 ms/s (freeing them) on the back.
+
+**Change** (`renderer_vulkan/vk_texture_cache.{h,cpp}`, `texture_cache/texture_cache.h`):
+- `TextureCacheRuntime` keeps a pool of `vk::Image` keyed by shape: `ImagePoolKey` = (format + 1) << 48 |
+  width << 24 | height, only for plain 2D, 1 level, 1 layer, 1 sample, depth 1, no ASTC/BCn/huge ASTC/
+  opaque BC1, not sparse or unwritten sparse (contents of such a target are undefined anyway).
+- `Image`'s constructor takes `original_image` from `AcquireOriginalImage`: a pooled image of that key
+  when `EDEN_NX2_TC_RT_REUSE=1`, else `MakeImage` as before. `TransitionImageLayout` already starts a new
+  `Image` object from `UNDEFINED` (`ExchangeInitialization`), so a reused VkImage is valid.
+- The `RT_EVICT` drop loop calls `image.MarkPoolable()` (public: the texture cache tests for it with a
+  `requires` expression, which silently skips a private member — the first build did nothing for that
+  reason). `~Image()` gives a poolable, unscaled `original_image` to `PoolImage` when the sentenced image
+  is finally destroyed (GPU done with it).
+- Bounds: 32 per shape, 512 MiB in all; when over budget the **oldest pooled images are destroyed
+  first** (`image_pool_order`). The first version refused new images once full and stayed stuck on
+  shapes no longer asked for (~35 % reuse, no gain).
+- Not for MSAA (per-VkImage resolve shadows).
+
+**Measured** (market, @a099ef505 vs @d9bf5d902): 84 % of host images reused (5,000-8,000 per 600 frames,
+700-1,650 made new, pool 380-510 MiB); `image create` 52 → 15 ms/s; `tc tick` 80 → ~45 ms/s; texture-cache
+upkeep ~164 → ~90 ms/s; **mean frame 38.7 → 35.0 ms**, every block 34.3-35.7 ms; frames > 100 ms 1.
+Player: "best performance so far". No visual defect.
+
+**Risk / check.** A reused VkImage keeps the old target's pixels until written; only images whose
+contents are undefined anyway are pooled (P01's targets). 512 MiB of VRAM sits outside the cache's
+count (the cache still reads the real device usage). Off: `EDEN_NX2_TC_RT_REUSE=0`.
+
+**Meets your work.** Your 20:11 status found the same churn (~9 % of your back creating/freeing
+textures) and tried a larger cache cap; here the cap was not the cause (new address every frame), and a
+larger cap on a 16 GB card was worse (VRAM full, spikes). Take P01 + P12 + P13 together.
+
+---
+
+## P13 — Cheaper upkeep of transient render targets
+
+Three small changes found with the P09 zones, same results with less work:
+- **`RT_EVICT` scan** (@b3983fefb): the drop loop walked the LRU from its oldest end every frame,
+  through thousands of textures older than a few frames, to find ~15 stale targets. A
+  `transient_targets` list (filled in `JoinImages`, swap-removed in `DeleteImage`) is checked instead,
+  with `LeastRecentlyUsedCache::GetTick` (new) for the last use. ~5 ms/s less.
+- **View format support** (@b3983fefb): `ImageView`'s constructor asked the driver for depth-comparison
+  and min/max filter support of the view format on every view (~600/s); `TextureCacheRuntime::
+  view_format_support` keeps the answer per `VkFormat`. No measurable change (the two
+  `vkCreateImageView` calls are the cost); kept as harmless.
+- **Overlap unlink** (@3832dc36b): `DeleteImage` removed the image from each alias's and overlap's list
+  with `erase_if` over the whole list. A transient target has ~140 overlaps whose lists are about as
+  long. `std::ranges::find` + `erase` (order kept, an image is in such a list once): `delete overlaps`
+  **22 → 13 ms/s**.
+
+Left after P12 + P13 (market, ms/s on the back): view create ~17, image free ~17, delete overlaps ~13,
+image create ~15, image join ~12, clear targets ~10.

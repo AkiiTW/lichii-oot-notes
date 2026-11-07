@@ -1,0 +1,230 @@
+From 04595848c4ee9274bee77f3dfb17b1c5118415e4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 17:30:11 +0100
+Subject: [PATCH] EDEN_NX2_TC_RT_REUSE: reuse the host images of dropped render
+ targets by shape
+
+Ocarina creates ~8,000 render targets per 600 frames in the market because it moves them to a new
+address almost every frame; with EDEN_NX2_TC_RT_EVICT the old ones are dropped after a few frames.
+With this switch their host images (plain 2D, one level, one layer, one sample, uncompressed) go
+into a small pool keyed by format and size (8 per shape, 1 GiB in all) when the sentenced image is
+destroyed, and the next image of that shape takes one instead of creating and allocating a new
+VkImage. The TC log reports reuses, misses and the pooled size.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ .../renderer_vulkan/vk_texture_cache.cpp      | 105 +++++++++++++++---
+ .../renderer_vulkan/vk_texture_cache.h        |  24 ++++
+ src/video_core/texture_cache/texture_cache.h  |  11 ++
+ 3 files changed, 127 insertions(+), 13 deletions(-)
+
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+index 91369df5a..dd47d3829 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+@@ -2891,24 +2891,96 @@ void TextureCacheRuntime::TickFrame() {
+     });
+ }
+ 
++namespace {
++// EDEN_NX2_TC_RT_REUSE pool key: plain single-level, single-layer, single-sample 2D images of an
++// uncompressed format (render targets), whose host image depends only on format and size. 0 when
++// the image is not of that kind.
++[[nodiscard]] u64 ImagePoolKey(const Device& device, const ImageInfo& info, GPUVAddr gpu_addr,
++                               u32 level_offset) {
++    if (info.type != ImageType::e2D || info.resources.levels != 1 ||
++        info.resources.layers != 1 || info.num_samples != 1 || level_offset != 0 ||
++        IsPixelFormatASTC(info.format) || IsPixelFormatBCn(info.format) ||
++        IsHugeAstcArray(device, info) || IsOpaqueBc1Astc(device, info) ||
++        UsesSparseLayers(device, info, gpu_addr) || UsesSparseTiles(device, info, gpu_addr) ||
++        IsUnwrittenSparse(device, info, gpu_addr) || info.size.width >= (1U << 24) ||
++        info.size.height >= (1U << 24) || info.size.depth != 1) {
++        return 0;
++    }
++    return (u64{static_cast<u32>(info.format) + 1} << 48) | (u64{info.size.width} << 24) |
++           u64{info.size.height};
++}
++
++[[nodiscard]] vk::Image AcquireOriginalImage(TextureCacheRuntime& runtime, const ImageInfo& info,
++                                             GPUVAddr gpu_addr, u32& level_offset) {
++    const ImageInfo host_info = TrimmedHostInfo(runtime.device, info, level_offset);
++    if (TextureCacheRuntime::ImageReuseEnabled()) {
++        if (const u64 key = ImagePoolKey(runtime.device, info, gpu_addr, level_offset); key != 0) {
++            if (vk::Image pooled = runtime.TakePooledImage(key)) {
++                return pooled;
++            }
++        }
++    }
++    return MakeImage(runtime.device, runtime.memory_allocator, host_info,
++                     IsHugeAstcArray(runtime.device, info)
++                         ? std::span<const VkFormat>{HugeAstcViewFormats}
++                     : IsOpaqueBc1Astc(runtime.device, info)
++                         ? std::span<const VkFormat>{OpaqueAstcViewFormats}
++                         : runtime.ViewFormats(info.format),
++                     AstcHostFormat(runtime.device, info),
++                     UsesSparseLayers(runtime.device, info, gpu_addr) ||
++                         UsesSparseTiles(runtime.device, info, gpu_addr) ||
++                         IsUnwrittenSparse(runtime.device, info, gpu_addr),
++                     UsesSparseTiles(runtime.device, info, gpu_addr) &&
++                         SparseTilesModeOf(runtime.device) == SparseTilesMode::Aliased);
++}
++} // Anonymous namespace
++
++bool TextureCacheRuntime::ImageReuseEnabled() {
++    static const bool enabled = [] {
++        const char* value = std::getenv("EDEN_NX2_TC_RT_REUSE");
++        const bool on = value != nullptr && value[0] == '1';
++        LOG_INFO(Render_Vulkan, "EDEN_NX2_TC_RT_REUSE: {}", on ? "on" : "off");
++        return on;
++    }();
++    return enabled;
++}
++
++vk::Image TextureCacheRuntime::TakePooledImage(u64 key) {
++    const auto it = image_pool.find(key);
++    if (it == image_pool.end() || it->second.empty()) {
++        ++pooled_image_misses;
++        return vk::Image{};
++    }
++    PooledImage pooled = std::move(it->second.back());
++    it->second.pop_back();
++    image_pool_bytes -= pooled.bytes;
++    ++pooled_image_hits;
++    return std::move(pooled.image);
++}
++
++bool TextureCacheRuntime::PoolImage(u64 key, u64 bytes, vk::Image& image) {
++    // Bounded: a few images per shape and 1 GiB in all, so the pool never holds much memory the
++    // texture cache does not count.
++    constexpr size_t MaxPerShape = 8;
++    constexpr u64 MaxBytes = 1ULL << 30;
++    auto& shape = image_pool[key];
++    if (shape.size() >= MaxPerShape || image_pool_bytes + bytes > MaxBytes) {
++        return false;
++    }
++    image_pool_bytes += bytes;
++    shape.push_back(PooledImage{std::move(image), bytes});
++    return true;
++}
++
+ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu_addr_,
+              VAddr cpu_addr_)
+     : VideoCommon::ImageBase(info_, gpu_addr_, cpu_addr_), scheduler{&runtime_.scheduler},
+       runtime{&runtime_},
+-      original_image(MakeImage(runtime_.device, runtime_.memory_allocator,
+-                               TrimmedHostInfo(runtime_.device, info, host_level_offset),
+-                               IsHugeAstcArray(runtime_.device, info)
+-                                   ? std::span<const VkFormat>{HugeAstcViewFormats}
+-                               : IsOpaqueBc1Astc(runtime_.device, info)
+-                                   ? std::span<const VkFormat>{OpaqueAstcViewFormats}
+-                                   : runtime->ViewFormats(info.format),
+-                               AstcHostFormat(runtime_.device, info),
+-                               UsesSparseLayers(runtime_.device, info, gpu_addr_) ||
+-                                   UsesSparseTiles(runtime_.device, info, gpu_addr_) ||
+-                                   IsUnwrittenSparse(runtime_.device, info, gpu_addr_),
+-                               UsesSparseTiles(runtime_.device, info, gpu_addr_) &&
+-                                   SparseTilesModeOf(runtime_.device) == SparseTilesMode::Aliased)),
++      original_image(AcquireOriginalImage(runtime_, info, gpu_addr_, host_level_offset)),
+       aspect_mask(ImageAspectMask(info.format)) {
++    pool_key = TextureCacheRuntime::ImageReuseEnabled()
++                   ? ImagePoolKey(runtime_.device, info, gpu_addr_, host_level_offset)
++                   : 0;
+     if (original_image.IsUnbacked()) {
+         flags |= VideoCommon::ImageFlagBits::Unbacked;
+         const ImageInfo host_info = TrimmedHostInfo(runtime_.device, info, host_level_offset);
+@@ -2971,6 +3043,13 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
+ Image::Image(const VideoCommon::NullImageParams& params) : VideoCommon::ImageBase{params} {}
+ 
+ Image::~Image() {
++    // A dropped render target (EDEN_NX2_TC_RT_EVICT) gives its host image to the pool. This runs
++    // when the sentenced image is destroyed, after the GPU is done with it.
++    if (poolable && pool_key != 0 && runtime != nullptr && original_image && !scaled_image) {
++        const u64 bytes = u64{info.size.width} * info.size.height *
++                          VideoCore::Surface::BytesPerBlock(info.format);
++        runtime->PoolImage(pool_key, bytes, original_image);
++    }
+     if (ENABLE_MSAA_RESOLVE_CONSUME && runtime != nullptr) {
+         if (original_image) {
+             runtime->EraseResolveShadow(*original_image);
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.h b/src/video_core/renderer_vulkan/vk_texture_cache.h
+index 49dd837a4..13e744cea 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.h
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.h
+@@ -11,6 +11,8 @@
+ #include <memory>
+ #include <optional>
+ #include <span>
++#include <unordered_map>
++#include <vector>
+ 
+ #include "video_core/texture_cache/texture_cache_base.h"
+ 
+@@ -228,6 +230,21 @@ public:
+         return view_formats[static_cast<std::size_t>(format)];
+     }
+ 
++    /// EDEN_NX2_TC_RT_REUSE: host images of render targets dropped by EDEN_NX2_TC_RT_EVICT are
++    /// kept by shape (pool key) and handed to the next image of that shape instead of a new one.
++    [[nodiscard]] vk::Image TakePooledImage(u64 key);
++    /// Keeps `image` for reuse; returns false (the caller destroys it) when the pool is full.
++    bool PoolImage(u64 key, u64 bytes, vk::Image& image);
++    [[nodiscard]] static bool ImageReuseEnabled();
++    u64 pooled_image_hits = 0;   ///< Images taken from the pool (logged with the texture cache)
++    u64 pooled_image_misses = 0; ///< Pool keys asked for with nothing pooled
++    struct PooledImage {
++        vk::Image image;
++        u64 bytes;
++    };
++    std::unordered_map<u64, std::vector<PooledImage>> image_pool;
++    u64 image_pool_bytes = 0;
++
+     void BarrierFeedbackLoop();
+ 
+     bool IsFormatDitherable(VideoCore::Surface::PixelFormat format);
+@@ -662,6 +679,13 @@ private:
+     vk::Image original_image;
+     vk::Image scaled_image;
+ 
++    /// Render target whose host image may go back to the runtime's pool (EDEN_NX2_TC_RT_REUSE).
++    void MarkPoolable() noexcept {
++        poolable = true;
++    }
++    u64 pool_key = 0; ///< Shape key when this image's host image can be pooled, else 0
++    bool poolable = false;
++
+     vk::Buffer compute_unswizzle_buffer;
+     VkDeviceSize compute_unswizzle_buffer_size = 0;
+     bool has_compute_unswizzle_buffer = false;
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index 8de486f82..e47fd6156 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -154,6 +154,10 @@ void TextureCache<P>::RunGarbageCollector() {
+         });
+         for (const ImageId image_id : stale) {
+             Image& image = slot_images[image_id];
++            if constexpr (requires { image.MarkPoolable(); }) {
++                // EDEN_NX2_TC_RT_REUSE: its host image serves the next target of the same shape.
++                image.MarkPoolable();
++            }
+             if (True(image.flags & ImageFlagBits::Tracked)) {
+                 UntrackImage(image, image_id);
+             }
+@@ -476,6 +480,13 @@ void TextureCache<P>::TickFrame() {
+                          "(EDEN_NX2_TC_RT_EVICT)",
+                  transient_target_deletes);
+         transient_target_deletes = 0;
++        if constexpr (requires { runtime.pooled_image_hits; }) {
++            LOG_INFO(HW_GPU, "Texture cache last 600 frames: host images reused {}, made new for a "
++                             "poolable shape {}, {} MiB pooled (EDEN_NX2_TC_RT_REUSE)",
++                     runtime.pooled_image_hits, runtime.pooled_image_misses,
++                     runtime.image_pool_bytes >> 20);
++            runtime.pooled_image_hits = runtime.pooled_image_misses = 0;
++        }
+         LOG_INFO(HW_GPU, "Texture cache last 600 frames: depth images marked CPU-modified by a "
+                          "guest memory write {} (writes <=4K {}, <=64K {}, <=1M {}, larger {}; whole "
+                          "image {}), by an unmap {}; made with an older image to copy from {}, sparse {}",
+-- 
+2.43.0
+

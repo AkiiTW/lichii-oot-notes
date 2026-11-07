@@ -13,17 +13,27 @@ They are read when Lichii starts: restart Lichii after a change.
 | `EDEN_NX2_TEST_START=150`, `EDEN_NX2_TEST_SECONDS=120` | A test window 150-270 s after the game is loaded: an on-screen countdown (AkiiTW's branch) and the log lines `Nx2TestWindow: recording starts` / `ends` |
 | `EDEN_NX2_TC_LOG=1` | Texture cache every 600 frames: images created/deleted, uploads and MiB, largest upload |
 | `EDEN_NX2_PERF_ON=<names>` / `EDEN_NX2_PERF_OFF=<names>` | Turn V3 optimizations on/off (`video_core/nx2_perf.h`); `EDEN_NX2_PERF_VERIFY=1` checks them against the old way |
+| `EDEN_NX2_TEST_LABEL` / `_PREPARE` / `_PURPOSE` | The panel's texts: what to do during the window, before it, and what the run measures (AkiiTW's branch) |
+| `EDEN_NX2_TIMELINE=<dir>` (+ `_AT`, `_SECONDS`, `_DETAIL`) | A Chrome/Perfetto trace of every thread for a few seconds, `_AT` seconds after the first present (~120 MB for 6 s of coarse spans) |
+| always on (AkiiTW's branch) | `Guest CPU reads of GPU-written memory per second: …` every 10 s (reads, ms waited, longest); `Slow frame: …` for each frame over 60 ms with what happened during it |
 
 ## The run
 
 1. Same save, same spot. AkiiTW's runs: Castle Town market, laps around the fountain while turning the
    camera, inside the test window (so every run is at the same time after loading — the first minutes
    after a load are dominated by texture uploads).
-2. One change per run. Restart Lichii between runs.
+2. One change per run. **Close Lichii completely between runs**: switches are read when Lichii starts,
+   not when a game starts (a run with only the game restarted kept the old value).
+   After a build that changes shader translation (e.g. cooperative-matrix HMMA), the first launch
+   rebuilds shaders and stutters: measure on the second launch.
 3. Compare **draws per frame** (draws/s ÷ frames/s) before FPS: it tells a game-side change from an
    emulator-side one. Compare zone times per call (ms ÷ calls) to see whether a cost moved.
-4. Expect ±5 % noise between runs of the same build (camera, NPCs, loading). Frizti's planned
-   fixed-route steering will remove most of it.
+4. Expect ±5 % noise between runs of the same build (camera, NPCs, loading): in Setup A the same code
+   gave 35.0-38.3 ms per frame over five runs. A single run cannot resolve a gain under ~5 %; judge small
+   changes on their own zones (ms/s and per-call µs), or do several launches per side as Frizti does.
+5. The window starts 150 s after load, so it measures a warmed-up area. Spikes on arriving somewhere new
+   happen before it; catch them with an early window (`EDEN_NX2_TEST_START=30`, route into new areas)
+   and the `Slow frame` lines.
 
 ## Reading a profile line
 

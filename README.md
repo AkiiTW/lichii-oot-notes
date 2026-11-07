@@ -20,6 +20,12 @@ voulez.
 | [`tools/`](tools) | Small scripts that read Lichii logs |
 | [`v3.5-proposals/`](v3.5-proposals) | **For Frizti:** everything AkiiTW's branch proposes for V3.5 — proposals, measurements, patches, compatibility notes, a Status column to fill |
 
+**Where things stand (2026-11-08):** Setup A (Ryzen 7 3800X + RTX 5060 Ti, 30 FPS goal) went from
+48.6 to 33.6 ms per frame in the Castle Town market (at the 30 FPS cap, 0 frames over 100 ms) with the
+changes in [`v3.5-proposals/`](v3.5-proposals) and 9 zortos build-116 commits; the biggest single
+causes were render targets recreated every frame (P01, P12) and the guest CPU waiting on GPU readbacks
+(still open). Details: `FINDINGS.md`, newest first.
+
 Nothing from the game itself goes here: no game files, dumps, textures or shaders. Only measurements,
 conclusions and code references.
 

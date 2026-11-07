@@ -1,0 +1,171 @@
+From c79d33c804ccfc332f9a8608bec44d442c42fca2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 22:07:17 +0100
+Subject: [PATCH] Test panel: EDEN_NX2_TEST_PURPOSE says what the test is for
+
+Shown wrapped under the title for the whole test (the panel grows to fit) and logged with the
+window, so the player knows what each build and switch set is measuring.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/common/nx2_test_window.cpp   |  6 +++++
+ src/common/nx2_test_window.h     |  5 ++--
+ src/yuzu/render/test_overlay.cpp | 42 +++++++++++++++++++++++++++++---
+ 3 files changed, 48 insertions(+), 5 deletions(-)
+
+diff --git a/src/common/nx2_test_window.cpp b/src/common/nx2_test_window.cpp
+index 32c63f3db..7c7c694ac 100644
+--- a/src/common/nx2_test_window.cpp
++++ b/src/common/nx2_test_window.cpp
+@@ -21,6 +21,7 @@ struct Config {
+     double seconds = 0.0;
+     std::string prepare;
+     std::string label;
++    std::string purpose;
+ };
+ 
+ std::mutex mutex;
+@@ -49,6 +50,7 @@ Config ReadConfig() {
+                                 sampling ? EnvSeconds("EDEN_NX2_SAMPLE_SECONDS", 30.0) : 0.0);
+     result.prepare = EnvText("EDEN_NX2_TEST_PREPARE", "Va au marché, devant la fontaine");
+     result.label = EnvText("EDEN_NX2_TEST_LABEL", "Tourne autour de la fontaine");
++    result.purpose = EnvText("EDEN_NX2_TEST_PURPOSE", "");
+     return result;
+ }
+ 
+@@ -69,6 +71,9 @@ void Start() {
+     }
+     LOG_INFO(Common, "Nx2TestWindow: recording from {:.0f} s to {:.0f} s after load ({})",
+              read.start, read.start + read.seconds, read.label);
++    if (!read.purpose.empty()) {
++        LOG_INFO(Common, "Nx2TestWindow: purpose: {}", read.purpose);
++    }
+     std::thread{[read, my_generation] {
+         std::this_thread::sleep_for(std::chrono::duration<double>(read.start));
+         if (generation.load() != my_generation) {
+@@ -98,6 +103,7 @@ Status Get() {
+     const double elapsed = std::chrono::duration<double>(Clock::now() - origin).count();
+     status.prepare = config.prepare;
+     status.label = config.label;
++    status.purpose = config.purpose;
+     status.seconds_total = config.seconds;
+     if (elapsed < config.start) {
+         status.phase = Phase::Waiting;
+diff --git a/src/common/nx2_test_window.h b/src/common/nx2_test_window.h
+index d4c407c2d..d9d8ef2c3 100644
+--- a/src/common/nx2_test_window.h
++++ b/src/common/nx2_test_window.h
+@@ -11,8 +11,8 @@ namespace Nx2TestWindow {
+ // in place. EDEN_NX2_TEST_START / EDEN_NX2_TEST_SECONDS (seconds after the game is loaded) set
+ // it; without them it follows the sampler's window when EDEN_NX2_SAMPLE is set
+ // (EDEN_NX2_SAMPLE_START / _SECONDS). EDEN_NX2_TEST_LABEL is the instruction shown during the
+-// window, EDEN_NX2_TEST_PREPARE the one shown before it. The start and end are logged, so a
+-// log can be cut to the window.
++// window, EDEN_NX2_TEST_PREPARE the one shown before it, EDEN_NX2_TEST_PURPOSE what the test is
++// for (shown the whole time). The start and end are logged, so a log can be cut to the window.
+ 
+ enum class Phase { None, Waiting, Recording, Done };
+ 
+@@ -22,6 +22,7 @@ struct Status {
+     double seconds_total = 0.0;
+     std::string prepare;
+     std::string label;
++    std::string purpose;
+ };
+ 
+ /// Called when a game is loaded: starts the clock (and the start/end log lines) if configured.
+diff --git a/src/yuzu/render/test_overlay.cpp b/src/yuzu/render/test_overlay.cpp
+index 001f1d729..a8238d4da 100644
+--- a/src/yuzu/render/test_overlay.cpp
++++ b/src/yuzu/render/test_overlay.cpp
+@@ -5,7 +5,9 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <string>
+ 
++#include <QFontMetrics>
+ #include <QPainter>
+ #include <QPainterPath>
+ 
+@@ -15,6 +17,25 @@
+ namespace {
+ 
+ constexpr int TickMs = 250;
++constexpr int PanelWidth = 380;
++constexpr int BaseHeight = 112;
++
++QFont PurposeFont(QFont font) {
++    font.setPixelSize(12);
++    font.setBold(false);
++    return font;
++}
++
++/// Height of the purpose text (EDEN_NX2_TEST_PURPOSE), wrapped to the panel, plus its gap.
++int PurposeHeight(const QFont& base, const std::string& purpose) {
++    if (purpose.empty()) {
++        return 0;
++    }
++    const QFontMetrics metrics(PurposeFont(base));
++    const QRect bounds = metrics.boundingRect(QRect(0, 0, PanelWidth - 32, 1000),
++                                              Qt::TextWordWrap, QString::fromStdString(purpose));
++    return bounds.height() + 8;
++}
+ constexpr double DoneShownSeconds = 60.0;
+ 
+ QString Clock(double seconds) {
+@@ -29,7 +50,7 @@ TestOverlay::TestOverlay(MainWindow* parent) : QWidget(parent), m_mainWindow{par
+     setAttribute(Qt::WA_TransparentForMouseEvents);
+     setAttribute(Qt::WA_ShowWithoutActivating);
+     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowDoesNotAcceptFocus);
+-    setFixedSize(340, 112);
++    setFixedSize(PanelWidth, BaseHeight + PurposeHeight(font(), Nx2TestWindow::Get().purpose));
+     connect(&m_timer, &QTimer::timeout, this, &TestOverlay::Tick);
+     connect(parent, &MainWindow::positionChanged, this, [this](const QPoint&) { Place(); });
+     m_timer.start(TickMs);
+@@ -59,6 +80,10 @@ void TestOverlay::Tick() {
+             return;
+         }
+     }
++    const int wanted_height = BaseHeight + PurposeHeight(font(), status.purpose);
++    if (height() != wanted_height) {
++        setFixedSize(PanelWidth, wanted_height);
++    }
+     Place();
+     if (!isVisible()) {
+         show();
+@@ -116,17 +141,28 @@ void TestOverlay::paintEvent(QPaintEvent*) {
+     painter.setPen(accent);
+     painter.drawText(QRectF(16, 10, width() - 32, 20), Qt::AlignLeft | Qt::AlignVCenter, head);
+ 
++    // What the test is for, wrapped under the title; the rest of the panel moves down by its height.
++    const int purpose_height = PurposeHeight(font, status.purpose);
++    if (purpose_height > 0) {
++        painter.setFont(PurposeFont(font));
++        painter.setPen(QColor(205, 205, 210));
++        painter.drawText(QRectF(16, 32, width() - 32, purpose_height - 8),
++                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
++                         QString::fromStdString(status.purpose));
++    }
++    const int dy = purpose_height;
++
+     font.setPixelSize(15);
+     font.setBold(true);
+     painter.setFont(font);
+     painter.setPen(Qt::white);
+-    painter.drawText(QRectF(16, 34, width() - 32, 24), Qt::AlignLeft | Qt::AlignVCenter,
++    painter.drawText(QRectF(16, 34 + dy, width() - 32, 24), Qt::AlignLeft | Qt::AlignVCenter,
+                      painter.fontMetrics().elidedText(line, Qt::ElideRight, width() - 32));
+ 
+     font.setPixelSize(22);
+     font.setBold(true);
+     painter.setFont(font);
+-    painter.drawText(QRectF(16, 60, width() - 32, 30), Qt::AlignLeft | Qt::AlignVCenter, count);
++    painter.drawText(QRectF(16, 60 + dy, width() - 32, 30), Qt::AlignLeft | Qt::AlignVCenter, count);
+ 
+     const QRectF bar(16, height() - 16, width() - 32, 5);
+     painter.fillRect(bar, QColor(255, 255, 255, 40));
+-- 
+2.43.0
+

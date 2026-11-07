@@ -1,0 +1,96 @@
+From 96c883ce7d4b12baa5f183b1b1bef12dff669f57 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Nov 2026 22:13:32 +0100
+Subject: [PATCH] GPU_PROFILE: split DeleteImage (views, overlaps, sentencing);
+ count overlaps unlinked
+
+DeleteImage costs ~43 us per image in the market outside its framebuffer removal.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HmEAGe4MCAJnHoeqq7Uysk
+---
+ src/video_core/nx2_profile.h                      |  4 ++++
+ src/video_core/texture_cache/texture_cache.h      | 14 +++++++++++++-
+ src/video_core/texture_cache/texture_cache_base.h |  3 ++-
+ 3 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
+index 300e7ad15..79cc684ab 100644
+--- a/src/video_core/nx2_profile.h
++++ b/src/video_core/nx2_profile.h
+@@ -78,6 +78,9 @@ enum class Zone : u32 {
+     TcCollect,    ///< Texture cache collector, early render target drops included
+     ImageDelete,  ///< Removing an image from the cache (DeleteImage, framebuffers apart)
+     FramebufferRemove, ///< Looking for and dropping the framebuffers of a deleted image's views
++    DeleteViews,  ///< DeleteImage: forgetting and sentencing the image's views
++    DeleteOverlaps, ///< DeleteImage: removing the image from its aliases' and overlaps' lists
++    DeleteSentence, ///< DeleteImage: moving the image to the sentenced list and freeing its slot
+     Count,
+ };
+ 
+@@ -93,6 +96,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
+     "ubo fast",      "ubo classic",   "ubo bank",       "storage binds",  "texbuf binds",
+     "clear targets", "image join",    "image create",   "view create",    "framebuffer create",
+     "tc tick",       "image free",    "tc collect",     "image delete",   "framebuffer remove",
++    "delete views",  "delete overlaps", "delete sentence",
+ };
+ 
+ // Read once, when the GPU thread starts (Initialize): Enabled() runs several times per method
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index 50e4fa123..fc265c06b 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -487,6 +487,10 @@ void TextureCache<P>::TickFrame() {
+                          "(EDEN_NX2_TC_RT_EVICT)",
+                  transient_target_deletes);
+         transient_target_deletes = 0;
++        LOG_INFO(HW_GPU, "Texture cache last 600 frames: {} images deleted, {} overlaps and aliases "
++                         "to unlink",
++                 images_deleted, delete_overlap_entries);
++        delete_overlap_entries = 0;
+         if constexpr (requires { runtime.pooled_image_hits; }) {
+             LOG_INFO(HW_GPU, "Texture cache last 600 frames: host images reused {}, made new for a "
+                              "poolable shape {}, {} MiB pooled, {} pooled images destroyed to stay in "
+@@ -3676,9 +3680,15 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
+             render_targets.depth_buffer_id = ImageViewId{};
+         }
+     }
+-    RemoveImageViewReferences(image_view_ids);
++    {
++        VideoCommon::Nx2Profile::Scope views_scope{VideoCommon::Nx2Profile::Zone::DeleteViews};
++        RemoveImageViewReferences(image_view_ids);
++    }
+     RemoveFramebuffers(image_view_ids);
+ 
++    {
++    VideoCommon::Nx2Profile::Scope overlaps_scope{VideoCommon::Nx2Profile::Zone::DeleteOverlaps};
++    delete_overlap_entries += image.aliased_images.size() + image.overlapping_images.size();
+     for (const AliasedImage& alias : image.aliased_images) {
+         ImageBase& other_image = slot_images[alias.id];
+         [[maybe_unused]] const size_t num_removed_aliases =
+@@ -3698,6 +3708,8 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
+         ASSERT_MSG(num_removed_overlaps == 1, "Invalid number of removed overlapps: {}",
+                    num_removed_overlaps);
+     }
++    }
++    VideoCommon::Nx2Profile::Scope sentence_scope{VideoCommon::Nx2Profile::Zone::DeleteSentence};
+     for (const ImageViewId image_view_id : image_view_ids) {
+         if (!immediate_delete) {
+             sentenced_image_view.Push(std::move(slot_image_views[image_view_id]));
+diff --git a/src/video_core/texture_cache/texture_cache_base.h b/src/video_core/texture_cache/texture_cache_base.h
+index f1e418998..c1d3cd177 100644
+--- a/src/video_core/texture_cache/texture_cache_base.h
++++ b/src/video_core/texture_cache/texture_cache_base.h
+@@ -157,7 +157,8 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
+     /// Images with transient_target set, so EDEN_NX2_TC_RT_EVICT checks only these each frame
+     /// instead of walking the whole LRU list (thousands of textures older than a few frames).
+     std::vector<ImageId> transient_targets;
+-    u64 transient_target_deletes{};      ///< EDEN_NX2_TC_RT_EVICT (last 600 frames)
++    u64 transient_target_deletes{};
++    u64 delete_overlap_entries{}; ///< Overlaps + aliases of deleted images (last 600 frames)      ///< EDEN_NX2_TC_RT_EVICT (last 600 frames)
+     /// EDEN_NX2_TC_LOG: why depth/stencil images got marked CPU-modified (last 600 frames):
+     /// a guest memory write, an unmap, created with an older image to copy from, created sparse.
+     std::array<u64, 4> depth_cpu_marks{};
+-- 
+2.43.0
+

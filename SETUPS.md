@@ -20,9 +20,11 @@ Not chasing 60. Every millisecond saved on the GPU back thread counts even when 
 | OS | Windows 11 25H2 (build 26200) |
 | Display | 240 Hz (host pacer reports 240.3 Hz) |
 
-**Build:** AkiiTW/Lichii branch `claude/v3-zen2` = Frizti V3 (`frizti-v3`, 00ef0ea6c) + changes listed in
-`FINDINGS.md`. MSYS2 clang 23, `-march=znver2`, PGO (Ocarina village profile over `eglantine.profdata`),
-workflow `.github/workflows/lichii-tuned.yml`, flavor `normal` unless noted.
+**Build:** AkiiTW/Lichii branch `claude/v3-zen2` = Frizti V3 (`frizti-v3`, 00ef0ea6c) + the changes in
+`v3.5-proposals/` + 9 zortos293/Lichii build-116 commits (since 2026-11-08, @9465605cf). MSYS2 clang 23,
+`-march=znver2`, PGO (profile recorded on ca4f7d0 in the market, Hyrule Field and Kokiri, over
+`eglantine.profdata`), workflow `.github/workflows/lichii-tuned.yml`, flavor `normal` unless noted.
+Vulkan reports `VK_KHR_cooperative_matrix` and "Guest tensor operations run on cooperative matrices".
 
 **Game:** Ocarina of Time `0400486024DEC000`, update v131072. Add-ons: `Dynamic-fps` (exefs patch);
 since 2026-11-07 also `OoT Perf - Ombres PNJ proches` (NPC local shadows 8/10 m, see `FINDINGS.md`).
@@ -47,9 +49,11 @@ since 2026-11-07 also `OoT Perf - Ombres PNJ proches` (NPC local shadows 8/10 m,
 | Disk shader cache / driver pipeline cache | on / on |
 | Thread placement | `Nx2Placement` split: GPU threads on `0xff00` (front `0x300`, back `0xc00`, Vulkan worker `0xf000`), guest cores and the rest on `0xff` |
 
-**Switches (`%APPDATA%\eden\nx2_switches.txt`), as of 2026-11-07:** `EDEN_NX2_THREAD_USAGE=1`,
+**Switches (`%APPDATA%\eden\nx2_switches.txt`), as of 2026-11-08:** for play,
+`EDEN_NX2_PERF_ON=clean_words`, `EDEN_NX2_BANK_COMPARE=1`, `EDEN_NX2_TC_RT_NO_UPLOAD=3`,
+`EDEN_NX2_TC_RT_EVICT=4`, `EDEN_NX2_TC_RT_REUSE=1`; for test runs add `EDEN_NX2_THREAD_USAGE=1`,
 `EDEN_NX2_GPU_PROFILE=1`, `EDEN_NX2_TC_LOG=1`, `EDEN_NX2_TEST_START=150`, `EDEN_NX2_TEST_SECONDS=120`,
-`EDEN_NX2_PERF_ON=clean_words`, `EDEN_NX2_BANK_COMPARE=1` (A/B pending). V3 options in effect:
+`EDEN_NX2_TEST_PURPOSE=<what the run is for>`. V3 options in effect:
 `method cb_batch clean_words usage_tracker bank_check frames_ahead pipeline_retention write_intersections
 sorted_page_batches unswizzle_workers` on; `bounds index_rebind split_overlap front_sleep submit_budget
 fragment_barrier fence_flush async_pipelines` off.
@@ -58,8 +62,11 @@ fragment_barrier fence_flush async_pipelines` off.
 window 150-270 s after load (so the first minutes' texture uploads are part of every run). Older runs
 (before the window existed) were taken after ~20 min of play and are not directly comparable.
 
-**Reference numbers (this setup):** market 27-30 FPS after ~20 min of play; ~21-22 FPS in the test
-window right after load (texture uploads); ~2,100 draws per frame; back ~870-910 ms/s busy.
+**Reference numbers (this setup):** start of 2026-11-07 (@d4738fce0): market 48.6 ms per frame in the
+test window (~21 FPS), 42 frames over 100 ms per 2 min; ~2,100 draws per frame; back ~870-910 ms/s busy.
+2026-11-08 (@9465605cf): market **33.6 ms** (blocks 33.4-33.9, at the 30 FPS cap), 0 frames over 100 ms,
+~61 k draws/s, back ~815 ms/s busy with ~180 ms/s idle; Hyrule Field at the cap once loaded, spikes
+(60-760 ms) when arriving in an area. Same-build runs spread about ±2-3 ms per frame.
 
 ## Setup B — Frizti (+ Claude)
 
