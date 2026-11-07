@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — Guest CPU waits ~150-195 ms/s on readbacks of GPU-written memory; deleting a render target unlinks ~140 overlaps — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@5cc9051c3 (wait timing in `GPU::OnCPURead`; DeleteImage split into zones; overlap count)
+- **Where measured:** market, fountain laps in the 150-270 s window; switches as in the RT_REUSE entry (no PREFLUSH: read traps)
+- **Measured:** guest CPU reads of GPU-written memory **125-186/s (4 KiB each), 136-197 ms waited per second (~1.2 ms each, longest 5-10 ms)** — ~5 ms per game frame with the game's thread stopped; meanwhile the back idles 144 ms/s (`split wait`). The game's own parameters point at its scene shading analyzer / auto exposure (luminance, probe and shadow ratios smoothed over 1-15 frames) and its z-prepass occlusion queries (`CreateZPrePassOcclusionQuery`, 4,096 queries). Known trade-off (Frizti, fbc7b1127): preflushing these reads was worth ~3 fps but gave overexposed loads; with 049f87818 (on-demand fallback) AkiiTW still saw white flashes (30a75df6d). DeleteImage: **`delete overlaps` 22 ms/s** (414/s; ~100-150 overlaps and aliases unlinked per deleted image, 0.56-1.8 M per 600 frames), views 0.2, sentencing 0.5. Mean frame 35.1 ms.
+- **Conclusion:** two leads. (1) The readback waits are the biggest single stall left on the guest side; worth a correct way to have the data ready (preflush whose reads never see stale data) — Frizti's area (front/fences). (2) Transient render targets overlap the stale ones at the same addresses; unlinking with a find + erase instead of `erase_if` over long lists is a cheap first step.
+- **Code / switch:** `GPU::OnCPURead`, `BufferCache::GetFlushArea` (`EDEN_NX2_PREFLUSH`), `TextureCache::DeleteImage`
+
 ### 2026-11-07 — RT_EVICT scan on a transient list; view format support cached: small — confirmed
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@b3983fefb (+ zones image delete, framebuffer remove)
 - **Where measured:** market, fountain laps in the 150-270 s window, switches as in the RT_REUSE entry
