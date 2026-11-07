@@ -41,14 +41,16 @@ the same code or the same problem, and what to check. Your Claude: add a line wh
 
 ## zortos build 116 picks carried by AkiiTW's branch
 
-`claude/v3-zen2` also carries 9 commits from zortos293/Lichii `nx2` (build-116), cherry-picked on
+**Nothing to take here: you are already porting zortos yourself.** This section only says which zortos
+commits were inside the build AkiiTW measured, so his numbers can be read against yours.
+`claude/v3-zen2` carries 9 commits from zortos293/Lichii `nx2` (build-116), cherry-picked on
 2026-11-07/08 and **not** part of the patch series: #412 (back-thread bookkeeping; one conflict: this
 tree already had its usage-tracker `tracked` guard, fixed in 9465605cf), #446 (suspended channels polled
 every 50 µs), #174 (software HMMA unroll), #481 (RangeSet as a sorted array), #475/#582 and #521/#583
 (HMMA on cooperative matrices), #478/#580 (range page-walk reuse), #250 (skip GPU-write invalidations of
 empty pages), #351 (read-only table pointers bound past 64 MiB: the white haze over Hyrule Field).
 Not taken: DLSS #606 (needs Streamline), #616, #413 (this tree has an equivalent `MayBeGpuModified`),
-#178, #641 (17 k lines: waiting for your port). If your V3.5 has your own ports of these, keep yours.
+#178, #641 (17 k lines: waiting for your port). When AkiiTW moves to your V3.5, your ports replace these picks.
 Together with the proposals they brought the market to 33.6 ms per frame (`../FINDINGS.md`, 2026-11-08).
 
 ## Switch names

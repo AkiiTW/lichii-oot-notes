@@ -17,8 +17,8 @@ ton code plus récent. Ton Claude marque chaque proposition acceptée / à modif
 - **Patches:** [`patches/`](patches) holds the 41 code commits in order (`git format-patch`, notes and
   the binary `.profraw` left out). **Verified (2026-11-08):** `git am patches/*.patch` on a clean
   `frizti-v3` applies all 41 without conflict and gives the `src/` and `.github/` of `33ded688f` minus
-  the 9 zortos293/Lichii commits that branch also carries (listed in [`COMPATIBILITY.md`](COMPATIBILITY.md);
-  you are porting zortos yourself, so they are not proposals).
+  the 9 zortos293/Lichii commits that branch also carries (listed in [`COMPATIBILITY.md`](COMPATIBILITY.md) for reference only:
+  you are already porting zortos, so they are not proposals and you have nothing to take there).
   [`patches/SERIES.md`](patches/SERIES.md) maps each patch to its proposal.
 - Your tree is newer than V3, so take proposals by cherry-picking their commits
   (`git fetch https://github.com/AkiiTW/Lichii claude/v3-zen2` then `git cherry-pick <hash>`) or
