@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — `EDEN_NX2_TC_RT_NO_UPLOAD=1`: far fewer spikes in the market — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@91498b2af
+- **Where measured:** market, fountain laps from the start of the 150-270 s window; compared with the same window before the switch (@d4738fce0)
+- **Measured:** frames over 100 ms (per ~5 windows of 600 presents) **42 → 6**, worst frame **1,583 → 147 ms**, mean frame 48.6 → 44.0 ms, draws/s 45.0 k → 49.3 k (+9.5 %), `texture upload` 131 → 72 ms/s. 4,500-6,600 new render targets per 600 frames skipped their upload. No visual defect seen (shadows, reflections, screen).
+- **Conclusion:** kept. Depth images created by a texture lookup (not as a render target) still upload 3.4-5.4 GB per 600 frames; `EDEN_NX2_TC_RT_NO_UPLOAD=2` (AkiiTW/Lichii@f9def68d9) also skips new depth/stencil images made for sampling — to test.
+- **Code / switch:** `TextureCache::JoinImages`
+
 ### 2026-11-07 — The churn is render targets recreated every frame or two, each filled from guest memory — confirmed (fix to test)
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@4cccf896c (`EDEN_NX2_TC_LOG=1`)
 - **Where measured:** market, 150-270 s after load
