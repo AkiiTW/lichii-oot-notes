@@ -56,6 +56,12 @@ sparse). The deeper fix is to stop the churn: patch 29 (@d18e0af21) counts disti
 to see whether the game moves its targets every frame (then: reuse a free image of the same shape) or
 the collector drops them at the same address.
 
+**Update (17:00).** The distinct-address count answers it: Ocarina moves its targets to a new address
+almost every frame (e.g. 974 created at 873 addresses per 600 frames), and every remaining depth upload is
+a new depth image with older images copied in. Under test (@361d13546): `EDEN_NX2_TC_RT_NO_UPLOAD=3`
+(skip those too; the copies still run) and `EDEN_NX2_TC_RT_EVICT=<frames>` (drop render targets unused
+for that many frames first, without the download that waits on `runtime.Finish()`).
+
 **Meets your work.** Fewer image creations also means fewer framebuffer rebuilds and fewer deferred
 clears on the back; it does not touch the split or the front's waits.
 

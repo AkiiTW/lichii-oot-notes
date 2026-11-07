@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — Ocarina moves its render targets to a new address almost every frame — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@d18e0af21 (`EDEN_NX2_TC_LOG=1`, `RT_NO_UPLOAD=2`)
+- **Where measured:** market, 150-270 s after load
+- **Measured (per 600 frames):** `R16G16B16A16_FLOAT` 1280×720 created 974-1,152× at 873-1,076 distinct addresses; `D32_FLOAT` 384×384 774-920× at 680-804; `A8B8G8R8_UNORM` 1280×720 652-765× at 591-715; the 2560×1440, 1280×720 and 640×360 targets ~300-390× at ~280-370 addresses. Collector deletes 7,000-7,650 (400-500 costly, 50-59 downloaded — each download waits for the GPU with `runtime.Finish()`). Device memory stays at the critical threshold. Every remaining depth upload (735-797, ~3.8 GB) is "made with an older image to copy from"; none come from guest writes or unmaps.
+- **Conclusion:** the targets come from a transient allocator, so the cache can never reuse them by address; stale ones fill it and push the collector into aggressive mode against real textures. Next build (AkiiTW/Lichii@361d13546): `EDEN_NX2_TC_RT_EVICT=<frames>` drops render targets unused for that many frames first, without download; `EDEN_NX2_TC_RT_NO_UPLOAD=3` skips the upload of depth images with join copies too. A further step: reuse a free host image of the same shape instead of creating one (~250 creations/s).
+- **Code / switch:** `TextureCache::RunGarbageCollector`, `JoinImages`
+
 ### 2026-11-07 — `EDEN_NX2_TC_RT_NO_UPLOAD=2` (new depth images made for sampling too) — confirmed
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@f9def68d9
 - **Where measured:** market, fountain laps from the start of the 150-270 s window
