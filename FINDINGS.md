@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — RT_EVICT scan on a transient list; view format support cached: small — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@b3983fefb (+ zones image delete, framebuffer remove)
+- **Where measured:** market, fountain laps in the 150-270 s window, switches as in the RT_REUSE entry
+- **Measured:** `tc collect` 26.3 → 3.4 ms/s, but 17.4 ms/s of it is now shown as `image delete` (407/s, **43 µs each**, framebuffer remove only 0.8 ms/s): the LRU walk itself was ~5 ms/s. `view create` unchanged (17.4 ms/s, ~27 µs each): the format query was not its cost (two vkCreateImageView per view). Texture cache upkeep ~90 ms/s as before. Mean frame 38.3 ms (35.0 in the run before) with ~4 % more draws per frame and 5 ms/s of texture uploads (1 before): scene variation, not the change (it only removes work).
+- **Conclusion:** kept (cheaper, no risk). Still unexplained: 43 µs per `DeleteImage` outside its nested zones. Left: image free 19, view create 17, image delete 17, image create 17, join 14, clear targets 10 ms/s.
+- **Code / switch:** `TextureCache::RunGarbageCollector` (transient_targets), `ImageView::ImageView` (view_format_support)
+
 ### 2026-11-07 — `EDEN_NX2_TC_RT_REUSE` with oldest-first eviction: market 38.7 → 35.0 ms per frame — confirmed
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@a099ef505
 - **Where measured:** market, fountain laps in the 150-270 s window, camera moved everywhere; switches as in the RT_EVICT entry plus `EDEN_NX2_TC_RT_REUSE=1`. Compared with the run just before on d9bf5d902 (same zones, no reuse).
