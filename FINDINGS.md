@@ -9,6 +9,12 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — Game-file mod: clustered lighting depth slices 512 → 128 — no effect, ruled out
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@5cc9051c3
+- **Where measured:** market, fountain laps in the 150-270 s window; `ModelSceneConfigParam/Main` `ViewFrustumClusterSizeZ` 512 → 128 (2 bytes, private mod)
+- **Measured:** mean frame 35.6 ms vs 35.1 without; draws/s, back zones and readback waits (118-136/s, 155-200 ms/s) unchanged. No lighting defect seen (a very white Hyrule Field was the game's own sun, present without the mod too).
+- **Conclusion:** ruled out: the light grid is built on the host GPU, not on the emulated side. Mod removed.
+
 ### 2026-11-07 — Guest CPU waits ~150-195 ms/s on readbacks of GPU-written memory; deleting a render target unlinks ~140 overlaps — confirmed
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@5cc9051c3 (wait timing in `GPU::OnCPURead`; DeleteImage split into zones; overlap count)
 - **Where measured:** market, fountain laps in the 150-270 s window; switches as in the RT_REUSE entry (no PREFLUSH: read traps)
