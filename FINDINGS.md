@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-08 — zortos build 116 picks (incl. cooperative-matrix HMMA and #351): market 33.6 ms/frame, nearly locked 30 — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@9465605cf (`try/zortos116`, now `claude/v3-zen2`)
+- **Taken from zortos293/Lichii:** #412 (back-thread bookkeeping), #446 (suspended channels polled every 50 µs), #174 (software HMMA unroll), #481 (RangeSet as a sorted array), #475/#582 + #521/#583 (HMMA on cooperative matrices; log: "Guest tensor operations run on cooperative matrices" on the RTX 5060 Ti), #478/#580 (range page-walk reuse), #250 (skip GPU-write invalidations of empty pages), #351 (read-only table pointers bound past 64 MiB: the white haze over Hyrule Field). Conflicts: one duplicate member (this tree already had #412's usage-tracker guard). Not taken: DLSS #606 (Streamline), #616, #413 (equivalent already here), #178, #641 (left to Frizti's port).
+- **Where measured:** market, fountain laps in the 150-270 s window; second launch (the first rebuilt the changed shaders: stutter)
+- **Measured:** mean frame **33.6 ms**, every 600-frame block 33.4-33.9 ms (the 30 FPS cap is 33.3), worst 73 ms, **0 frames > 100 ms**; draws/s 54-57 k → 61 k; guest CPU readback waits 150-195 → **108-145 ms/s**; back `flush work` 47 → 39, `other` 84 → 74 ms/s; back `split wait` 147 → 184 ms/s (idle at the cap). Player: "very good".
+- **Conclusion:** kept. From the start of the day (@d4738fce0): 48.6 → 33.6 ms per frame in the market.
+
 ### 2026-11-07 — `EDEN_NX2_TC_RT_EVICT=2` (drop after 2 unused frames instead of 4): worse — ruled out
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@3832dc36b
 - **Where measured:** market, fountain laps in the 150-270 s window
