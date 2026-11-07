@@ -1,0 +1,109 @@
+# Findings (newest first)
+
+Shape and statuses: see [`CLAUDE.md`](CLAUDE.md). AkiiTW's hardware below: Ryzen 7 3800X (Zen 2, two
+4-core CCX), RTX 5060 Ti 16 GB, Windows 11, docked, 1x resolution, 30 FPS mode. Builds: MSYS2 clang 23,
+`-march=znver2`, PGO, from [AkiiTW/Lichii `claude/v3-zen2`](https://github.com/AkiiTW/Lichii/tree/claude/v3-zen2)
+(Frizti V3 + changes).
+
+---
+
+### 2026-11-07 — Native 64 KiB uniform banks re-uploaded every frame: ~180 MB/s — to test
+- **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@984269912 · **Hardware:** 3800X / 5060 Ti
+- **Where measured:** market, fountain laps, 150-270 s after load
+- **Measured:** zone `ubo bank` ~33 ms/s of the back, ~4,000 banks/s, ~180 MB/s uploaded (~45 KiB each).
+- **Conclusion:** the once-per-frame re-upload in `BindHostGraphicsUniformBuffer` (the path for
+  `uniform_buffer_sizes == 0x10000` with native tiling) copies the same bytes most frames.
+  `EDEN_NX2_BANK_COMPARE=1` (AkiiTW/Lichii@d4738fce0) keeps each bank's last uploaded bytes and skips the
+  upload when they still match (exact: the host copy only changes by uploads of guest bytes or GPU writes,
+  and GPU-written banks never reach that path). A/B pending. Related: Frizti's queue item 13.
+- **Code / switch:** `buffer_cache.h` BindHostGraphicsUniformBuffer, `bank_shadows`; `EDEN_NX2_BANK_COMPARE=1`
+
+### 2026-11-07 — `clean_words` cuts storage buffer binds 64 → 17 ms/s — confirmed (market)
+- **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@984269912 · **Hardware:** 3800X / 5060 Ti
+- **Where measured:** market, fountain laps, 150-270 s after load; one run each
+- **Measured:** `storage binds` 64.4 → 17.1 ms/s; draws/s 46,400 → 47,800 (+3 %); mean frame 44.7 → 45.1 ms
+  (scene noise from texture loading; see the texture entry). No visual defect seen in the market.
+- **Conclusion:** `SynchronizeBuffer` walking clean tracker words dominates storage buffer binds
+  (~34,000 a second, ~2 µs each). Kept on (`EDEN_NX2_PERF_ON=clean_words`). Not yet checked in Kokiri Forest
+  (zortos293/Lichii#161).
+- **Code / switch:** `Nx2Perf::Opt::CleanWords`, `BufferCache::SynchronizeBuffer`
+
+### 2026-11-07 — Where "bind stage buffers" goes — confirmed
+- **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@984269912 (new zones) · **Hardware:** 3800X / 5060 Ti
+- **Where measured:** market, fountain laps, 150-270 s after load
+- **Measured (ms per second of the back):** storage binds ~66 (~34 k/s) · ubo bank ~33 (~4 k/s) ·
+  ubo fast ~21 (~240 k/s, ~500 B each, 0.09 µs) · ubo classic ~13 (~46 k/s, ~28 KB each, ~900/s with
+  CPU-written data) · rest of the zone ~13. Uniform buffers compared in place: ~150 k unchanged / ~85 k
+  changed per second.
+- **Conclusion:** the small-uniform fast path is already cheap. The first guess (big banks taking the
+  slow path) was wrong. Storage buffers and bank re-uploads are the targets.
+- **Code / switch:** zones `ubo fast`, `ubo classic`, `ubo bank`, `storage binds`, `texbuf binds` in
+  `nx2_profile.h`
+
+### 2026-11-07 — Texture uploads cost the back ~1 ms each for minutes after loading — to test
+- **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@d8e4fe222 · **Hardware:** 3800X / 5060 Ti
+- **Where measured:** market, 150-270 s after load, vs. the same spot after 20 min of play
+- **Measured:** `texture upload` 100-160 ms/s (~90-180 uploads/s) after load vs. ~8 ms/s later; `clear`
+  ~40 µs each vs. ~13 µs. Same per-call cost for every other zone. Market ~21-22 FPS in that window vs.
+  28-30 later.
+- **Conclusion:** right after loading, texture uploads are the biggest single cost on the back. Settings:
+  `accelerate_astc=Gpu`, `astc_recompression=Bc3` (transcoded on the GPU), so the CPU part is something
+  else (staging, copies). `EDEN_NX2_TC_LOG=1` run pending. Idea: do uploads off the back thread.
+- **Code / switch:** `TextureCache::RefreshContents` (zone `texture upload`)
+
+### 2026-11-07 — The back is the limit in the market: ~2,100 draws per frame at ~15 µs — confirmed
+- **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@eba617204 · **Hardware:** 3800X / 5060 Ti
+- **Where measured:** market, fountain laps, after ~20 min of play
+- **Measured:** back ~870-880 ms/s busy, ~60,000 draws/s, ~2,100 draws/frame, 27-30 FPS. Front 95 % busy
+  of which ~520 ms/s waiting for the back (fence release 288 ms at 1,463/s, macro DMA read 216 ms at
+  2,010/s). Guest cores 40-60 % each, VulkanWorker ~20 %, presents never wait on the host GPU fence.
+  Back zones (ms/s): bind stage buffers 184, method 163, other 109, update buffers 62, draw 52,
+  flush work 48, compute 46, pipeline lookup 35, fill image views 30, read handles 26, clear 25.
+- **Conclusion:** per-draw cost on the back and the front↔back waits set the frame rate; the host GPU
+  does not. The console does ~126,000 draws/s (1080p60).
+- **Code / switch:** `EDEN_NX2_GPU_PROFILE=1`, `EDEN_NX2_THREAD_USAGE=1`
+
+### 2026-11-07 — Game-file mods: only NPC shadow distance helps — confirmed / ruled out
+- **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@eba617204 · **Hardware:** 3800X / 5060 Ti
+- **Where measured:** market then Hyrule Field, same route each run
+- **Measured:** `System/GameGraphics/LocalDepthShadowParam` `NPCFadeStart/End` 25/30 → 8/10 m:
+  ~2,270 → ~2,100 draws/frame in the market (−6 %), 26-27 → 27-29 FPS (**confirmed**).
+  `gsys/ModelSceneConfigParam/Main` `DepthShadowCascadeNum0` 3 → 2: same draws, rainbow/blown-out lighting
+  in Hyrule Field (**ruled out**: shaders expect 3 cascades). Handheld mode (`_hh` LOD settings): ~0
+  (**ruled out**).
+- **Conclusion:** draws come from the scene itself; game files will not move the frame rate much more.
+  Patch values in place (same file size, no RESTBL change).
+- **Code / switch:** LayeredFS mods in `load/0400486024DEC000/<mod>/romfs/`
+
+### 2026-11-07 — MinGW builds: threads had no OS names; the sampler crashed — confirmed, fixed
+- **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@df6362759, @984269912 · **Hardware:** 3800X / 5060 Ti
+- **Measured:** `SetThreadDescription` was only called in MSVC builds, so `EDEN_NX2_SAMPLE` matched no
+  thread in clang/MinGW builds. Once names were set, the sampler froze then crashed the emulator when it
+  started.
+- **Conclusion:** names fixed for `_WIN32`; the sampler's stack walk now reads only between the paused
+  RSP and the thread's stack base and stops at a frame that does not move up. Not retested yet; zone
+  profiling (`GPU_PROFILE`) was enough so far.
+- **Code / switch:** `common/thread.cpp` SetCurrentThreadName, `common/nx2_sampler.cpp` Walk
+
+### 2026-11-07 — "HostTiming" threads at ~98 % CPU are a wait, not work — confirmed
+- **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@eba617204
+- **Conclusion:** `Common::Event::WaitFor` uses MONITORX/MWAITX on Ryzen: the OS counts the thread busy
+  while the core sleeps in C1. Low priority; could matter only if it shares a core with a GPU thread.
+
+### 2026-11-06 — Pipeline cache: merge keys that differ only in unread vertex attribute types — confirmed
+- **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@1db14a304, @e941a3b89 · **Hardware:** 3800X / 5060 Ti
+- **Measured:** one session: 6,570 duplicate cached pipelines merged, 17,504 rewritten from another driver
+  version, 20,184 loaded; no in-game pipeline builds in the village afterwards.
+- **Conclusion:** keys carry vertex attribute types the shader never reads; clearing them (per vertex
+  shader pair) and filing shared caches under the local `driver_version` when `driver_id` matches removes
+  most mid-game builds when using a shared cache. `EDEN_NX2_VERTEX_KEY_MERGE=0` turns the merge off.
+- **Code / switch:** `vk_pipeline_cache.cpp` NormalizeVertexInputKey, disk loader
+
+### 2026-11-06 — `EDEN_NX2_PREFLUSH=1` causes one-frame white flashes — ruled out
+- **Who:** AkiiTW (+ Claude) · **Build:** Frizti V3
+- **Conclusion:** removed from the built-in switches in AkiiTW's branch (@30a75df6d); flashes gone.
+
+### 2026-11-05 — Earlier tries without gain — ruled out
+- `TC_NO_CAP` (texture cache following the whole VRAM budget): worse half-turns (13 FPS, white flash);
+  fixed thresholds 9216/11264 MiB were better.
+- `DMA_READ_WAIT=track`: 98 % of reads still waited, slightly slower.
