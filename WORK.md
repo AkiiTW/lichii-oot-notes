@@ -6,7 +6,7 @@ Edit this table when you start or finish something. One owner per row; others bu
 | --- | --- | --- | --- |
 | Front waits for the back (MME DMA reads, ~2,000/s; fence and semaphore releases) | Frizti + Claude | In progress: per-page write index, tracked inline uploads, bounded dispatch/upload writes (EXP10, −6 % front waiting); next: bounded semaphore/query releases, 14-18 ms fence-release drains | Frizti/Lichii |
 | Cost of each draw on the back (buffer binds, banks, storage buffers) | AkiiTW + Claude | In progress: `clean_words` kept (storage binds 64 → 17 ms/s); `EDEN_NX2_BANK_COMPARE` kept (95 % of bank bytes unchanged, ubo bank 33 → 22 ms/s) | AkiiTW/Lichii `claude/v3-zen2` |
-| Texture cache thrash in the market (collector evicts ~250 images/s at the 11,264 MiB critical threshold, re-uploads ~400 MB/s) | AkiiTW + Claude | Testing larger thresholds (12288/13824 MiB) on a 16 GB card; then cheaper eviction/re-upload for smaller cards | AkiiTW/Lichii `claude/v3-zen2` |
+| Texture cache thrash in the market (collector evicts ~250 images/s at the 11,264 MiB critical threshold, re-uploads ~400 MB/s) | AkiiTW + Claude | Larger thresholds ruled out (VRAM full, spikes). Measuring what is created (~200 images/s) and uploaded, by kind and shape | AkiiTW/Lichii `claude/v3-zen2` |
 | Per-bind native uniform bank check (~10 % of the back in Frizti's tree) | **to agree** | Both sides touch it: AkiiTW's `EDEN_NX2_BANK_COMPARE` compares a bank's bytes before re-uploading it; Frizti's queue item 13 wants the per-bind check cheaper | — |
 | PGO profile retrained on current code (market + Hyrule Field) | Frizti + Claude | Planned | Frizti/Lichii |
 | Repeatable test route (Link steered around the fountain, fixed camera) | Frizti + Claude | Planned | Frizti/Lichii |

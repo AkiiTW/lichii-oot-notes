@@ -9,12 +9,19 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — Larger texture cache thresholds (12288/13824 MiB) on a 16 GB card: worse — ruled out
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@d4738fce0
+- **Where measured:** market, 150-270 s after load, `EDEN_NX2_TC_LOG=1`
+- **Measured:** device memory pinned at the new critical (~13,850 MiB), ~4,400 images / ~11 GB, the collector still evicts ~5,000 images per 600 frames (6-9 GB re-uploaded); 14.2 GB VRAM in use on the card, frame spikes up to 1.3 s, ~29-32 frames over 100 ms per 600, mean frame 48.6 → 51.5 ms, draws/s 45 k → 39 k.
+- **Conclusion:** the working set does not fit at any threshold this card allows: something creates and drops images continuously (~200 created per second). Back to 9216/11264. Next: `EDEN_NX2_TC_LOG` now logs uploads by kind (ASTC / BCn / depth / colour, into GPU-written images) and the shapes of created images (AkiiTW/Lichii@4cccf896c).
+- **Code / switch:** `EDEN_NX2_TC_EXPECTED_MIB`, `EDEN_NX2_TC_CRITICAL_MIB`
+
 ### 2026-11-07 — The texture cache thrashes at its critical threshold in the market — confirmed (fix to test)
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@d4738fce0
 - **Goal / settings that matter:** `EDEN_NX2_TC_EXPECTED_MIB=9216`, `EDEN_NX2_TC_CRITICAL_MIB=11264` (from the dist `nx2_switches.txt`), VRAM mode Conservative, 16 GB card
 - **Where measured:** market, fountain laps, 150-270 s after load, `EDEN_NX2_TC_LOG=1`
 - **Measured:** device memory pinned at ~11,250-11,350 MiB (critical 11,264), ~3,800 images / ~8.6 GB. Per 600 frames (~27 s): the collector deletes 6,200-10,200 images and 2,800-5,900 are uploaded again from guest memory, **8.9-17 GB uploaded** (~400 MB/s). This is the 100-160 ms/s of `texture upload` on the back (~1 ms each) and the slower clears.
-- **Conclusion:** the "texture uploads after load" entry below is mostly cache thrash, not first-time loading. Next run: `EDEN_NX2_TC_EXPECTED_MIB=12288`, `EDEN_NX2_TC_CRITICAL_MIB=13824`. Cards with less VRAM will need another answer (cheaper re-upload, smarter eviction).
+- **Conclusion:** the "texture uploads after load" entry below is mostly cache thrash, not first-time loading. Raising the thresholds did not help (entry above): the churn is in what gets created, not in the cap.
 - **Code / switch:** `TextureCache::TickFrame` collector, `ApplyThresholdOverrides`
 
 ### 2026-11-07 — `EDEN_NX2_BANK_COMPARE`: 95 % of re-uploaded bank bytes were unchanged — confirmed
