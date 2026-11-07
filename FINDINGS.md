@@ -9,7 +9,22 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
-### 2026-11-07 — Native 64 KiB uniform banks re-uploaded every frame: ~180 MB/s — to test
+### 2026-11-07 — The texture cache thrashes at its critical threshold in the market — confirmed (fix to test)
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@d4738fce0
+- **Goal / settings that matter:** `EDEN_NX2_TC_EXPECTED_MIB=9216`, `EDEN_NX2_TC_CRITICAL_MIB=11264` (from the dist `nx2_switches.txt`), VRAM mode Conservative, 16 GB card
+- **Where measured:** market, fountain laps, 150-270 s after load, `EDEN_NX2_TC_LOG=1`
+- **Measured:** device memory pinned at ~11,250-11,350 MiB (critical 11,264), ~3,800 images / ~8.6 GB. Per 600 frames (~27 s): the collector deletes 6,200-10,200 images and 2,800-5,900 are uploaded again from guest memory, **8.9-17 GB uploaded** (~400 MB/s). This is the 100-160 ms/s of `texture upload` on the back (~1 ms each) and the slower clears.
+- **Conclusion:** the "texture uploads after load" entry below is mostly cache thrash, not first-time loading. Next run: `EDEN_NX2_TC_EXPECTED_MIB=12288`, `EDEN_NX2_TC_CRITICAL_MIB=13824`. Cards with less VRAM will need another answer (cheaper re-upload, smarter eviction).
+- **Code / switch:** `TextureCache::TickFrame` collector, `ApplyThresholdOverrides`
+
+### 2026-11-07 — `EDEN_NX2_BANK_COMPARE`: 95 % of re-uploaded bank bytes were unchanged — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@d4738fce0
+- **Where measured:** market, 150-270 s after load
+- **Measured:** banks ~6-9 MiB/s uploaded vs ~120-185 MiB/s found unchanged; zone `ubo bank` 32.6 → 21.9 ms/s. Frame time not comparable between the runs (texture cache thrash, entry above). No visual defect seen.
+- **Conclusion:** kept on. What remains of the zone is the compare itself (memcmp of ~180 MB/s) and its bookkeeping; a cheaper change detector (e.g. tracking writes to those pages) would remove most of it.
+- **Code / switch:** `EDEN_NX2_BANK_COMPARE=1`
+
+### 2026-11-07 — Native 64 KiB uniform banks re-uploaded every frame: ~180 MB/s — superseded (see BANK_COMPARE above)
 - **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@984269912 · **Hardware:** 3800X / 5060 Ti
 - **Where measured:** market, fountain laps, 150-270 s after load
 - **Measured:** zone `ubo bank` ~33 ms/s of the back, ~4,000 banks/s, ~180 MB/s uploaded (~45 KiB each).
@@ -42,7 +57,7 @@ were taken after ~20 min of play — compare like with like.
 - **Code / switch:** zones `ubo fast`, `ubo classic`, `ubo bank`, `storage binds`, `texbuf binds` in
   `nx2_profile.h`
 
-### 2026-11-07 — Texture uploads cost the back ~1 ms each for minutes after loading — to test
+### 2026-11-07 — Texture uploads cost the back ~1 ms each for minutes after loading — superseded (cache thrash, above)
 - **Who:** AkiiTW (+ Claude) · **Build:** AkiiTW/Lichii@d8e4fe222 · **Hardware:** 3800X / 5060 Ti
 - **Where measured:** market, 150-270 s after load, vs. the same spot after 20 min of play
 - **Measured:** `texture upload` 100-160 ms/s (~90-180 uploads/s) after load vs. ~8 ms/s later; `clear`
