@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — The churn is render targets recreated every frame or two, each filled from guest memory — confirmed (fix to test)
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@4cccf896c (`EDEN_NX2_TC_LOG=1`)
+- **Where measured:** market, 150-270 s after load
+- **Measured (per 600 frames):** created 7,934 images, collector deleted 4,997. Most created shapes are render targets: `R16G16B16A16_FLOAT` 1280×720 ×882, `D32_FLOAT` 384×384 ×734 (shadow depths), `A8B8G8R8_UNORM` 1280×720 ×591, `D32_FLOAT` 2560×1440 ×301, `B10G11R11_FLOAT` 2560×1440 ×301, `D32_FLOAT` 1280×720 ×301, 640×360 targets ×~300, all at 0x81xxxxxxxx. Uploads from guest memory: 4,561 = 9.6 GB, of which **depth 1,521 uploads = 6.6 GB**, other colour 589 = 2.3 GB, ASTC 1,215 = 345 MB, BCn 1,236 = 315 MB.
+- **Conclusion:** the targets live in memory the game reuses for differently shaped targets (transient heap / aliasing), so the cache drops and rebuilds them, and each rebuild uploads guest memory the GPU overwrites anyway. The existing skip (`overwritten_by_clear`) does not catch them. `EDEN_NX2_TC_RT_NO_UPLOAD=1` (AkiiTW/Lichii@91498b2af): a render target made from scratch (no older image to copy from) starts undefined and is tracked, so CPU writes still upload. The real fix — keeping aliased targets alive — is larger.
+- **Code / switch:** `TextureCache::JoinImages`, `FindRenderTargetView`
+
 ### 2026-11-07 — Larger texture cache thresholds (12288/13824 MiB) on a 16 GB card: worse — ruled out
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@d4738fce0
 - **Where measured:** market, 150-270 s after load, `EDEN_NX2_TC_LOG=1`
