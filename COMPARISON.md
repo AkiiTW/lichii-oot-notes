@@ -33,6 +33,7 @@ Frizti's Claude can replace this log with its own entries in `FINDINGS.md`.
 
 | Time (2026-11-07) | Status |
 | --- | --- |
+| 18:20 | **Every stage (game CPU, GPU front, GPU back) is only 53-70 % busy: they wait on each other frame by frame.** Testing: frames-ahead 2 (the next frame prepared early). — *On Setup A in 30 FPS mode the back is busier (~85-91 %, the limit), so the gain should be smaller but real at the market's 21-27 FPS dips; costs one frame of input latency. AkiiTW will A/B it once published.* |
 | 17:15 | Castle Town **45.5 → 51.3 FPS (+12.6 %) with "acquire learning"**: lets the 2 GPU threads overlap at the game's waits. Checking now: flicker (flash watcher) and wrong guesses. — *First result of the overlap work; AkiiTW will take it into Setup A once published.* |
 | 16:42 | 45 FPS on his route (goal 60). **The big one: the 2 GPU threads take turns instead of overlapping; up to +25-28 % if they overlap.** Next: find what each of the game's ~2,300 waits/s waits for. — *Matches Setup A: the front waits 520-650 ms/s while the back idles 90-130 ms/s (`split wait`), i.e. drains serialize them; AkiiTW's estimate was up to ~+15 % on a Zen 2 where the back is busier.* |
 | 15:58 | New Castle Town route recorded, **44.6 FPS baseline**. Testing: 2D blits noted by their destination (A/B, 8 rounds). Next: how busy the back GPU thread is. Saves restored after every test. — *AkiiTW's data on the back in the market: `FINDINGS.md`, entries "The back is the limit…" and "Where bind stage buffers goes".* |
