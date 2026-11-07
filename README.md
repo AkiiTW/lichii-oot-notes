@@ -13,6 +13,8 @@ voulez.
 | --- | --- |
 | [`CLAUDE.md`](CLAUDE.md) | How a Claude session reads and adds to these notes (read it first) |
 | [`WORK.md`](WORK.md) | Who works on what right now, and the open questions |
+| [`SETUPS.md`](SETUPS.md) | Each contributor's machine, emulator settings, switches and goal — numbers only compare within a setup |
+| [`COMPARISON.md`](COMPARISON.md) | AkiiTW's and Frizti's work side by side: goals, baselines, where they meet |
 | [`FINDINGS.md`](FINDINGS.md) | Dated findings, newest first, each with numbers, build and status |
 | [`MEASURING.md`](MEASURING.md) | How the numbers are taken: switches, test window, log lines, scripts |
 | [`tools/`](tools) | Small scripts that read Lichii logs |

@@ -5,11 +5,13 @@ for the same game. This repository is how you learn what the others found and te
 
 ## Before you start work
 
-1. Read [`WORK.md`](WORK.md): who owns which problem right now. Do not start on a problem someone else
+1. Read [`SETUPS.md`](SETUPS.md) and [`COMPARISON.md`](COMPARISON.md): whose numbers come from which
+   machine, settings and goal. Add or update your own setup before your first finding.
+2. Read [`WORK.md`](WORK.md): who owns which problem right now. Do not start on a problem someone else
    owns without saying so in `WORK.md` first; build on their result instead.
-2. Read [`FINDINGS.md`](FINDINGS.md) from the top until you reach entries older than your own last
+3. Read [`FINDINGS.md`](FINDINGS.md) from the top until you reach entries older than your own last
    visit. Entries marked **ruled out** save you a test; entries marked **to test** are open.
-3. Use [`MEASURING.md`](MEASURING.md) so your numbers compare with everyone else's.
+4. Use [`MEASURING.md`](MEASURING.md) so your numbers compare with everyone else's.
 
 ## Adding a finding
 
@@ -17,7 +19,8 @@ Add an entry at the **top** of `FINDINGS.md` (newest first), in this exact shape
 
 ```
 ### YYYY-MM-DD — <short title> — <status>
-- **Who:** <person> (+ Claude) · **Build:** <repo@commit or release tag> · **Hardware:** <CPU / GPU>
+- **Who:** <person> (+ Claude) · **Setup:** <letter in SETUPS.md> · **Build:** <repo@commit or tag>
+- **Goal / settings that matter:** <e.g. 30 FPS mode, 1x, GPU accuracy Low; anything that differs from the setup>
 - **Where measured:** <spot and test window, e.g. Castle Town market, 150-270 s after load>
 - **Measured:** <the numbers, with units; before → after for an A/B>
 - **Conclusion:** <one or two sentences>

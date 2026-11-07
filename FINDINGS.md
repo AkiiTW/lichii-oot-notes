@@ -1,9 +1,11 @@
 # Findings (newest first)
 
-Shape and statuses: see [`CLAUDE.md`](CLAUDE.md). AkiiTW's hardware below: Ryzen 7 3800X (Zen 2, two
-4-core CCX), RTX 5060 Ti 16 GB, Windows 11, docked, 1x resolution, 30 FPS mode. Builds: MSYS2 clang 23,
-`-march=znver2`, PGO, from [AkiiTW/Lichii `claude/v3-zen2`](https://github.com/AkiiTW/Lichii/tree/claude/v3-zen2)
-(Frizti V3 + changes).
+Shape and statuses: see [`CLAUDE.md`](CLAUDE.md). **Every entry by AkiiTW below uses Setup A**
+([`SETUPS.md`](SETUPS.md)): Ryzen 7 3800X + RTX 5060 Ti, docked, 1x + FSR 1, GPU accuracy Low, ASTC on
+GPU → BC3, 30 FPS mode, goal = stable 30 FPS with headroom. Builds from
+[AkiiTW/Lichii `claude/v3-zen2`](https://github.com/AkiiTW/Lichii/tree/claude/v3-zen2) (Frizti V3 +
+changes). Runs dated 2026-11-07 after 14:55 use the 150-270 s test window right after load; earlier ones
+were taken after ~20 min of play — compare like with like.
 
 ---
 
