@@ -9,6 +9,13 @@ were taken after ~20 min of play — compare like with like.
 
 ---
 
+### 2026-11-07 — `EDEN_NX2_TC_RT_NO_UPLOAD=2` (new depth images made for sampling too) — confirmed
+- **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@f9def68d9
+- **Where measured:** market, fountain laps from the start of the 150-270 s window
+- **Measured:** mean frame 44.0 (`=1`) → **40.4 ms** (`=2`); before any of the texture work (@d4738fce0) it was 48.6 ms. Frames over 100 ms stay low (5 over 7 windows), worst 140 ms. `texture upload` 72 → 66 ms/s. Depth uploads still 350-990 per 600 frames (1.4-5 GB): they now come from a later path, not from image creation. No visual defect seen (shadows checked).
+- **Conclusion:** kept. Next: find where the remaining depth uploads come from (CPU-modified marks after a download of an aliased image?), and why the targets are recreated at all (keeping aliased targets alive would also remove most of the ~70 ms/s of clears).
+- **Code / switch:** `EDEN_NX2_TC_RT_NO_UPLOAD=2`
+
 ### 2026-11-07 — `EDEN_NX2_TC_RT_NO_UPLOAD=1`: far fewer spikes in the market — confirmed
 - **Who:** AkiiTW (+ Claude) · **Setup:** A · **Build:** AkiiTW/Lichii@91498b2af
 - **Where measured:** market, fountain laps from the start of the 150-270 s window; compared with the same window before the switch (@d4738fce0)
